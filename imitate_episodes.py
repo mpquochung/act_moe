@@ -435,7 +435,7 @@ if __name__ == '__main__':
     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
     parser.add_argument('--num_experts', action='store', type=int, help='num_experts', required=False)
     parser.add_argument('--top_k', action='store', type=int, help='top_k', required=False)
-    parser.add_argument('--is_moe', action='store', type=int, help='is_moe', required=True)
+    parser.add_argument('--is_moe', action='store', type=str, help='is_moe', required=True)
     parser.add_argument('--temporal_agg', action='store_true')
     
     main(vars(parser.parse_args()))
