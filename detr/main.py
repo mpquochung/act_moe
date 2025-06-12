@@ -52,6 +52,18 @@ def get_args_parser():
     parser.add_argument('--masks', action='store_true',
                         help="Train segmentation head if the flag is provided")
 
+    def str2bool(v):
+        if isinstance(v, bool):
+            return v
+        if v.lower() in ('yes', 'true', 't', 'y', '1'):
+            return True
+        elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+            return False
+        else:
+            raise argparse.ArgumentTypeError('Boolean value expected.')
+
+    parser.add_argument('--is_moe', type=str2bool, required=True, help='Use Mixture-of-Experts (True/False)')
+
     # repeat args in imitate_episodes just to avoid error. Will not be used
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--onscreen_render', action='store_true')
@@ -62,6 +74,8 @@ def get_args_parser():
     parser.add_argument('--num_epochs', action='store', type=int, help='num_epochs', required=True)
     parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
     parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
+    parser.add_argument('--num_experts', action='store', type=int, help='num_experts', required=False, default=4)
+    parser.add_argument('--top_k', action='store', type=int, help='top_k', required=False, default=2)
     parser.add_argument('--temporal_agg', action='store_true')
 
     return parser

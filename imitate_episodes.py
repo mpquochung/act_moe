@@ -415,6 +415,15 @@ def plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed):
         plt.savefig(plot_path)
     print(f'Saved plots to {ckpt_dir}')
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -429,13 +438,14 @@ if __name__ == '__main__':
     parser.add_argument('--lr', action='store', type=float, help='lr', required=True)
 
     # for ACT
+
+    parser.add_argument('--is_moe', type=str2bool, required=True, help='Use Mixture-of-Experts (True/False)')
     parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
     parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
     parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
-    parser.add_argument('--num_experts', action='store', type=int, help='num_experts', required=False)
-    parser.add_argument('--top_k', action='store', type=int, help='top_k', required=False)
-    parser.add_argument('--is_moe', action='store', type=str, help='is_moe', required=True)
+    parser.add_argument('--num_experts', action='store', type=int, help='num_experts', required=False, default=4)
+    parser.add_argument('--top_k', action='store', type=int, help='top_k', required=False, default=2)
     parser.add_argument('--temporal_agg', action='store_true')
     
     main(vars(parser.parse_args()))
