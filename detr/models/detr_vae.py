@@ -7,6 +7,7 @@ from torch import nn
 from torch.autograd import Variable
 from .backbone import build_backbone
 from .transformer import build_transformer, TransformerEncoder, TransformerEncoderLayer
+from .moe import build_transformer_moe, TransformerEncoderLayerWithMoE
 
 import numpy as np
 
@@ -225,6 +226,24 @@ def build_encoder(args):
 
     return encoder
 
+def build_encoder_moe(args):
+    d_model = args.hidden_dim # 256
+    dropout = args.dropout # 0.1
+    nhead = args.nheads # 8
+    num_experts = args.num_experts
+    top_k = args.top_k
+    dim_feedforward = args.dim_feedforward # 2048
+    num_encoder_layers = args.enc_layers # 4 # TODO shared with VAE decoder
+    normalize_before = args.pre_norm # False
+    activation = "relu"
+
+    encoder_layer = TransformerEncoderLayerWithMoE(d_model, nhead, dim_feedforward,
+                                            dropout, activation, normalize_before, num_experts, top_k)
+    encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
+    encoder = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
+
+    return encoder
+
 
 def build(args):
     state_dim = 14 # TODO hardcode
@@ -236,18 +255,37 @@ def build(args):
     backbone = build_backbone(args)
     backbones.append(backbone)
 
-    transformer = build_transformer(args)
+    if args.is_moe:
 
-    encoder = build_encoder(args)
+        print("Using Mixture of Experts")
 
-    model = DETRVAE(
-        backbones,
-        transformer,
-        encoder,
-        state_dim=state_dim,
-        num_queries=args.num_queries,
-        camera_names=args.camera_names,
-    )
+        transformer = build_transformer_moe(args)
+
+        encoder = build_encoder_moe(args)
+
+        model = DETRVAE(
+            backbones,
+            transformer,
+            encoder,
+            state_dim=state_dim,
+            num_queries=args.num_queries,
+            camera_names=args.camera_names,
+        ) 
+
+    else:
+
+        transformer = build_transformer(args)
+
+        encoder = build_encoder(args)
+
+        model = DETRVAE(
+            backbones,
+            transformer,
+            encoder,
+            state_dim=state_dim,
+            num_queries=args.num_queries,
+            camera_names=args.camera_names,
+        )
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print("number of parameters: %.2fM" % (n_parameters/1e6,))

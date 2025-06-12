@@ -59,6 +59,9 @@ def main(args):
                          'kl_weight': args['kl_weight'],
                          'hidden_dim': args['hidden_dim'],
                          'dim_feedforward': args['dim_feedforward'],
+                         'num_experts': args['num_experts'],
+                         'top_k': args['top_k'],
+                         'is_moe': args['is_moe'],
                          'lr_backbone': lr_backbone,
                          'backbone': backbone,
                          'enc_layers': enc_layers,
@@ -430,6 +433,9 @@ if __name__ == '__main__':
     parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
     parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
+    parser.add_argument('--num_experts', action='store', type=int, help='num_experts', required=False)
+    parser.add_argument('--top_k', action='store', type=int, help='top_k', required=False)
+    parser.add_argument('--is_moe', action='store', type=int, help='is_moe', required=True)
     parser.add_argument('--temporal_agg', action='store_true')
     
     main(vars(parser.parse_args()))
