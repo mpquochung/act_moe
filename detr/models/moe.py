@@ -20,12 +20,12 @@ class TransformerMoE(nn.Module):
 
         encoder_layer = TransformerEncoderLayerWithMoE(d_model, nhead, dim_feedforward,
                                                 dropout, activation, normalize_before, num_experts, top_k)
-        encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
+        encoder_norm = nn.RMSNorm(d_model) if normalize_before else None
         self.encoder = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
 
         decoder_layer = TransformerDecoderLayerWithMoE(d_model, nhead, dim_feedforward,
                                                 dropout, activation, normalize_before, num_experts, top_k)
-        decoder_norm = nn.LayerNorm(d_model)
+        decoder_norm = nn.RMSNorm(d_model)
         self.decoder = TransformerDecoder(decoder_layer, num_decoder_layers, decoder_norm,
                                           return_intermediate=return_intermediate_dec)
 
@@ -121,6 +121,8 @@ class TransformerEncoderLayerWithMoE(TransformerEncoderLayer):
 
         # Replace FFN with MoE
         self.moe_layer = MoELayer(d_model, dim_feedforward, num_experts, top_k)
+        self.norm1 = nn.RMSNorm(d_model)
+        self.norm2 = nn.RMSNorm(d_model)
 
     def forward_post(self,
                      src,
@@ -163,25 +165,19 @@ class TransformerEncoderLayerWithMoE(TransformerEncoderLayer):
             return self.forward_pre(src, src_mask, src_key_padding_mask, pos)
         return self.forward_post(src, src_mask, src_key_padding_mask, pos)
 
-class TransformerDecoderLayerWithMoE(nn.Module):
+class TransformerDecoderLayerWithMoE(TransformerDecoderLayer):
 
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
                  activation="relu", normalize_before=False, num_experts = 4, top_k = 2):
-        super().__init__()
-        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
-        self.multihead_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        super().__init__(d_model, nhead, dim_feedforward, dropout, activation, normalize_before)
+       
         
         self.moe_layer = MoELayer(d_model, dim_feedforward, num_experts, top_k)
 
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.norm3 = nn.LayerNorm(d_model)
-        self.dropout1 = nn.Dropout(dropout)
-        self.dropout2 = nn.Dropout(dropout)
-        self.dropout3 = nn.Dropout(dropout)
+        self.norm1 = nn.RMSNorm(d_model)
+        self.norm2 = nn.RMSNorm(d_model)
+        self.norm3 = nn.RMSNorm(d_model)
 
-        self.activation = _get_activation_fn(activation)
-        self.normalize_before = normalize_before
 
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
         return tensor if pos is None else tensor + pos

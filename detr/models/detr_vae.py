@@ -239,7 +239,7 @@ def build_encoder_moe(args):
 
     encoder_layer = TransformerEncoderLayerWithMoE(d_model, nhead, dim_feedforward,
                                             dropout, activation, normalize_before, num_experts, top_k)
-    encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
+    encoder_norm = nn.RMSNorm(d_model) if normalize_before else None
     encoder = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
 
     return encoder
