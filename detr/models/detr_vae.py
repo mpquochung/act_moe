@@ -34,7 +34,7 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 
 class DETRVAE(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names):
+    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names, aux_loss = False):
         """ Initializes the model.
         Parameters:
             backbones: torch module of the backbone to be used. See backbone.py
@@ -263,14 +263,6 @@ def build(args):
 
         encoder = build_encoder_moe(args)
 
-        model = DETRVAE(
-            backbones,
-            transformer,
-            encoder,
-            state_dim=state_dim,
-            num_queries=args.num_queries,
-            camera_names=args.camera_names,
-        ) 
 
     else:
 
@@ -278,14 +270,15 @@ def build(args):
 
         encoder = build_encoder(args)
 
-        model = DETRVAE(
-            backbones,
-            transformer,
-            encoder,
-            state_dim=state_dim,
-            num_queries=args.num_queries,
-            camera_names=args.camera_names,
-        )
+    model = DETRVAE(
+        backbones,
+        transformer,
+        encoder,
+        state_dim=state_dim,
+        num_queries=args.num_queries,
+        camera_names=args.camera_names,
+        aux_loss=False
+    )
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print("number of parameters: %.2fM" % (n_parameters/1e6,))

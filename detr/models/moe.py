@@ -15,7 +15,7 @@ class TransformerMoE(nn.Module):
     def __init__(self, d_model=512, nhead=8, num_encoder_layers=6,
                  num_decoder_layers=6, dim_feedforward=2048, dropout=0.1, num_experts=4, top_k=2,
                  activation="relu", normalize_before=False,
-                 return_intermediate_dec=False):
+                 return_intermediate_dec=False, aux_loss= False):
         super().__init__()
 
         encoder_layer = TransformerEncoderLayerWithMoE(d_model, nhead, dim_feedforward,
@@ -33,6 +33,7 @@ class TransformerMoE(nn.Module):
 
         self.d_model = d_model
         self.nhead = nhead
+        self.return_aux = aux_loss
 
     def _reset_parameters(self):
         for p in self.parameters():
@@ -89,7 +90,7 @@ class MoELayer(nn.Module):
         self.experts = nn.ModuleList([Expert(d_model, dim_feedforward) for _ in range(num_experts)])
         self.gate = nn.Linear(d_model, num_experts)
 
-    def forward(self, x):
+    def forward(self, x, return_aux = False):
         # x: [seq_len, batch, dim]
         seq_len, batch_size, dim = x.size()
         x_flat = x.view(-1, dim)  # [seq_len * batch, dim]
@@ -112,6 +113,9 @@ class MoELayer(nn.Module):
                 outputs = self.experts[e_idx](selected_inputs)
                 expert_outputs[mask] += expert_prob[mask] * outputs
 
+        if return_aux:
+            return expert_outputs.view(seq_len, batch_size, dim), topk_probs, topk_idx
+
         return expert_outputs.view(seq_len, batch_size, dim)
     
 class TransformerEncoderLayerWithMoE(TransformerEncoderLayer):
@@ -119,69 +123,80 @@ class TransformerEncoderLayerWithMoE(TransformerEncoderLayer):
                  activation="relu", normalize_before=False, num_experts=4, top_k=2):
         super().__init__(d_model, nhead, dim_feedforward, dropout, activation, normalize_before)
 
-        # Replace FFN with MoE
         self.moe_layer = MoELayer(d_model, dim_feedforward, num_experts, top_k)
+        self.norm1 = nn.RMSNorm(d_model)
+        self.norm2 = nn.RMSNorm(d_model)
 
     def forward_post(self,
                      src,
                      src_mask: Optional[Tensor] = None,
                      src_key_padding_mask: Optional[Tensor] = None,
-                     pos: Optional[Tensor] = None):
+                     pos: Optional[Tensor] = None, return_aux = False):
         q = k = self.with_pos_embed(src, pos)
         src2 = self.self_attn(q, k, value=src, attn_mask=src_mask,
                               key_padding_mask=src_key_padding_mask)[0]
         src = src + self.dropout1(src2)
         src = self.norm1(src)
 
-        src2 = self.moe_layer(src)  # Replaces FFN with MoE
+        if return_aux:
+            src2, topk_probs, topk_idx = self.moe_layer(src, return_aux = return_aux) 
+            src = src + self.dropout2(src2)
+            src = self.norm2(src)
+            
+            return src, topk_probs, topk_idx
+        
+        else:
+            src2 = self.moe_layer(src) 
+            src = src + self.dropout2(src2)
+            src = self.norm2(src)
 
-        src = src + self.dropout2(src2)
-        src = self.norm2(src)
-        return src
+            return src, None, None
 
     def forward_pre(self, src,
                     src_mask: Optional[Tensor] = None,
                     src_key_padding_mask: Optional[Tensor] = None,
-                    pos: Optional[Tensor] = None):
+                    pos: Optional[Tensor] = None,
+                    return_aux: Optional[bool] = False):
         src2 = self.norm1(src)
         q = k = self.with_pos_embed(src2, pos)
         src2 = self.self_attn(q, k, value=src2, attn_mask=src_mask,
                               key_padding_mask=src_key_padding_mask)[0]
         src = src + self.dropout1(src2)
         src2 = self.norm2(src)
-
-        src2 = self.moe_layer(src2)
-
-        src = src + self.dropout2(src2)
-        return src
+        if return_aux:
+            src2, topk_probs, topk_idx = self.moe_layer(src2, return_aux)
+            src = src + self.dropout2(src2)
+        
+            return src, topk_probs, topk_idx
+        
+        else:
+            src2 = self.moe_layer(src2)
+            src = src + self.dropout2(src2)
+        
+            return src, None, None
 
     def forward(self, src,
                 src_mask: Optional[Tensor] = None,
                 src_key_padding_mask: Optional[Tensor] = None,
-                pos: Optional[Tensor] = None):
+                pos: Optional[Tensor] = None,
+                return_aux: Optional[bool] = False):
         if self.normalize_before:
-            return self.forward_pre(src, src_mask, src_key_padding_mask, pos)
-        return self.forward_post(src, src_mask, src_key_padding_mask, pos)
+            return self.forward_pre(src, src_mask, src_key_padding_mask, pos, return_aux)
+        return self.forward_post(src, src_mask, src_key_padding_mask, pos, return_aux)
 
-class TransformerDecoderLayerWithMoE(nn.Module):
+class TransformerDecoderLayerWithMoE(TransformerDecoderLayer):
 
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
                  activation="relu", normalize_before=False, num_experts = 4, top_k = 2):
-        super().__init__()
-        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
-        self.multihead_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        super().__init__(d_model, nhead, dim_feedforward, dropout, activation, normalize_before)
+
         
         self.moe_layer = MoELayer(d_model, dim_feedforward, num_experts, top_k)
 
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.norm3 = nn.LayerNorm(d_model)
-        self.dropout1 = nn.Dropout(dropout)
-        self.dropout2 = nn.Dropout(dropout)
-        self.dropout3 = nn.Dropout(dropout)
-
-        self.activation = _get_activation_fn(activation)
-        self.normalize_before = normalize_before
+        self.norm1 = nn.RMSNorm(d_model)
+        self.norm2 = nn.RMSNorm(d_model)
+        self.norm3 = nn.RMSNorm(d_model)
+ 
 
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
         return tensor if pos is None else tensor + pos
@@ -192,7 +207,8 @@ class TransformerDecoderLayerWithMoE(nn.Module):
                      tgt_key_padding_mask: Optional[Tensor] = None,
                      memory_key_padding_mask: Optional[Tensor] = None,
                      pos: Optional[Tensor] = None,
-                     query_pos: Optional[Tensor] = None):
+                     query_pos: Optional[Tensor] = None,
+                     return_aux: Optional[bool] = False):
         q = k = self.with_pos_embed(tgt, query_pos)
         tgt2 = self.self_attn(q, k, value=tgt, attn_mask=tgt_mask,
                               key_padding_mask=tgt_key_padding_mask)[0]
@@ -204,10 +220,18 @@ class TransformerDecoderLayerWithMoE(nn.Module):
                                    key_padding_mask=memory_key_padding_mask)[0]
         tgt = tgt + self.dropout2(tgt2)
         tgt = self.norm2(tgt)
-        tgt2 = self.moe_layer(tgt)
-        tgt = tgt + self.dropout3(tgt2)
-        tgt = self.norm3(tgt)
-        return tgt
+
+        if return_aux is False:
+            tgt2 = self.moe_layer(tgt)
+            tgt = tgt + self.dropout3(tgt2)
+            tgt = self.norm3(tgt)
+            return tgt, None, None
+        
+        else:
+            tgt2, topk_probs, topk_idx = self.moe_layer(tgt)
+            tgt = tgt + self.dropout3(tgt2)
+            tgt = self.norm3(tgt)
+            return tgt, topk_probs, topk_idx
 
     def forward_pre(self, tgt, memory,
                     tgt_mask: Optional[Tensor] = None,
@@ -215,7 +239,8 @@ class TransformerDecoderLayerWithMoE(nn.Module):
                     tgt_key_padding_mask: Optional[Tensor] = None,
                     memory_key_padding_mask: Optional[Tensor] = None,
                     pos: Optional[Tensor] = None,
-                    query_pos: Optional[Tensor] = None):
+                    query_pos: Optional[Tensor] = None,
+                    return_aux: Optional[bool] = False):
         tgt2 = self.norm1(tgt)
         q = k = self.with_pos_embed(tgt2, query_pos)
         tgt2 = self.self_attn(q, k, value=tgt2, attn_mask=tgt_mask,
@@ -228,9 +253,16 @@ class TransformerDecoderLayerWithMoE(nn.Module):
                                    key_padding_mask=memory_key_padding_mask)[0]
         tgt = tgt + self.dropout2(tgt2)
         tgt2 = self.norm3(tgt)
-        tgt2 = self.moe_layer(tgt2)
-        tgt = tgt + self.dropout3(tgt2)
-        return tgt
+
+        if return_aux:
+            tgt2, topk_probs, topk_idx = self.moe_layer(tgt2)
+            tgt = tgt + self.dropout3(tgt2)
+            return tgt, topk_probs, topk_idx
+        else:
+
+            tgt2 = self.moe_layer(tgt2)
+            tgt = tgt + self.dropout3(tgt2)
+            return tgt, None, None
 
     def forward(self, tgt, memory,
                 tgt_mask: Optional[Tensor] = None,
@@ -238,12 +270,13 @@ class TransformerDecoderLayerWithMoE(nn.Module):
                 tgt_key_padding_mask: Optional[Tensor] = None,
                 memory_key_padding_mask: Optional[Tensor] = None,
                 pos: Optional[Tensor] = None,
-                query_pos: Optional[Tensor] = None):
+                query_pos: Optional[Tensor] = None,
+                return_aux: Optional[bool] = False):
         if self.normalize_before:
             return self.forward_pre(tgt, memory, tgt_mask, memory_mask,
-                                    tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos)
+                                    tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos, return_aux)
         return self.forward_post(tgt, memory, tgt_mask, memory_mask,
-                                 tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos)
+                                 tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos, return_aux)
 
 def _get_activation_fn(activation):
     """Return an activation function given a string"""
