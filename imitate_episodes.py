@@ -62,6 +62,7 @@ def main(args):
                          'num_experts': args['num_experts'],
                          'top_k': args['top_k'],
                          'is_moe': args['is_moe'],
+                         'aux_loss': args['aux_loss'],
                          'lr_backbone': lr_backbone,
                          'backbone': backbone,
                          'enc_layers': enc_layers,
@@ -440,6 +441,7 @@ if __name__ == '__main__':
     # for ACT
 
     parser.add_argument('--is_moe', type=str2bool, required=True, help='Use Mixture-of-Experts (True/False)')
+    parser.add_argument('--aux_loss', type=str2bool, required=False, help='Use auxiliary Loss for MoE (True/False)', default=False)
     parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
     parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
     parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
