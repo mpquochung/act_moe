@@ -86,6 +86,7 @@ class DETRVAE(nn.Module):
         """
         is_training = actions is not None # train or val
         bs, _ = qpos.shape
+        encoder_query_aux_loss, encoder_aux_loss, decoder_aux_loss = None, None, None
         ### Obtain latent z from action sequence
         if is_training:
             # project action sequence to embedding dim, and concat with a CLS token
@@ -103,7 +104,12 @@ class DETRVAE(nn.Module):
             pos_embed = self.pos_table.clone().detach()
             pos_embed = pos_embed.permute(1, 0, 2)  # (seq+1, 1, hidden_dim)
             # query model
-            encoder_output, encoder_query_aux_loss = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
+            if self.aux_loss:
+                encoder_output, encoder_query_aux_loss = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
+
+            else:
+                encoder_output = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
+
             encoder_output = encoder_output[0] # take cls output only
             latent_info = self.latent_proj(encoder_output)
             mu = latent_info[:, :self.latent_dim]
@@ -130,19 +136,32 @@ class DETRVAE(nn.Module):
             # fold camera dimension into width dimension
             src = torch.cat(all_cam_features, axis=3)
             pos = torch.cat(all_cam_pos, axis=3)
-            hs, encoder_aux_loss, decoder_aux_loss = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, self.additional_pos_embed.weight)[0]
+            
+            if self.aux_loss:
+                hs, encoder_aux_loss, decoder_aux_loss = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, self.additional_pos_embed.weight)
+
+            else:
+                hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, self.additional_pos_embed.weight)[0]
+        
         else:
             qpos = self.input_proj_robot_state(qpos)
             env_state = self.input_proj_env_state(env_state)
             transformer_input = torch.cat([qpos, env_state], axis=1) # seq length = 2
-            hs, encoder_aux_loss, decoder_aux_loss = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)[0]
+
+            if self.aux_loss:
+                hs, encoder_aux_loss, decoder_aux_loss = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)
+            
+            else:
+                hs = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)[0]
+ 
         a_hat = self.action_head(hs)
         is_pad_hat = self.is_pad_head(hs)
         
         if encoder_query_aux_loss:
             encoder_aux_loss += encoder_query_aux_loss
-
+        
         return a_hat, is_pad_hat, [mu, logvar], encoder_aux_loss, decoder_aux_loss
+     
 
 
 
@@ -268,6 +287,12 @@ def build(args):
         transformer = build_transformer_moe(args)
 
         encoder = build_encoder_moe(args)
+    
+    else:
+                
+        transformer = build_transformer(args)
+
+        encoder = build_encoder(args)
 
     if args.aux_loss:
         print("Using aux loss for MoE")
@@ -275,12 +300,6 @@ def build(args):
     if args.aux_loss:
         if not args.is_moe:
             raise ValueError("Auxiliary loss is only applicable when using Mixture of Experts (MoE). Please set --is_moe.")
-
-    else:
-
-        transformer = build_transformer(args)
-
-        encoder = build_encoder(args)
 
     model = DETRVAE(
         backbones,

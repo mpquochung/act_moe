@@ -57,6 +57,9 @@ def main(args):
         policy_config = {'lr': args['lr'],
                          'num_queries': args['chunk_size'],
                          'kl_weight': args['kl_weight'],
+                         'encoder_aux_weight': args['encoder_aux_weight'],
+                         'decoder_aux_weight': args['decoder_aux_weight'],
+                         'aux_weight': args['aux_weight'],
                          'hidden_dim': args['hidden_dim'],
                          'dim_feedforward': args['dim_feedforward'],
                          'num_experts': args['num_experts'],
@@ -267,6 +270,8 @@ def eval_bc(config, ckpt_name, save_episode=True):
                     raw_action = policy(qpos, curr_image)
                 else:
                     raise NotImplementedError
+                
+                print(raw_action.shape)
 
                 ### post-process actions
                 raw_action = raw_action.squeeze(0).cpu().numpy()
@@ -443,6 +448,9 @@ if __name__ == '__main__':
     parser.add_argument('--is_moe', type=str2bool, required=True, help='Use Mixture-of-Experts (True/False)')
     parser.add_argument('--aux_loss', type=str2bool, required=False, help='Use auxiliary Loss for MoE (True/False)', default=False)
     parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
+    parser.add_argument('--encoder_aux_weight', action='store', type=float, help='Weight for auxiliary loss of encoder', required=False, default=0.2)
+    parser.add_argument('--decoder_aux_weight', action='store', type=float, help='Weight for auxiliary loss of decoder', required=False, default=0.8)
+    parser.add_argument('--aux_weight', action='store', type=float, help='aux_weight', required=False, default=0.5)
     parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
     parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)

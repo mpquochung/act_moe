@@ -68,6 +68,7 @@ class TransformerMoE(nn.Module):
         hs, decoder_aux_loss = self.decoder(tgt, memory, memory_key_padding_mask=mask,
                           pos=pos_embed, query_pos=query_embed)
         hs = hs.transpose(1, 2)
+
         return hs, encoder_aux_loss, decoder_aux_loss
 
 
@@ -94,7 +95,7 @@ class MoELayer(nn.Module):
     def forward(self, x, return_aux = False):
         # x: [seq_len, batch, dim]
         seq_len, batch_size, dim = x.size()
-        x_flat = x.view(-1, dim)  # [seq_len * batch, dim]
+        x_flat = x.contiguous().view(-1, dim)  # [seq_len * batch, dim]
 
         scores = self.gate(x_flat)  # [seq_len * batch, num_experts]
         topk_vals, topk_idx = torch.topk(scores, self.top_k, dim=-1)  # [seq_len * batch, k]
@@ -233,7 +234,7 @@ class TransformerDecoderLayerWithMoE(TransformerDecoderLayer):
             return tgt, None, None
         
         else:
-            tgt2, topk_probs, topk_idx = self.moe_layer(tgt)
+            tgt2, topk_probs, topk_idx = self.moe_layer(tgt, return_aux= return_aux)
             tgt = tgt + self.dropout3(tgt2)
             tgt = self.norm3(tgt)
             return tgt, topk_probs, topk_idx
@@ -304,14 +305,14 @@ class TransformerEncoderMoE(nn.Module):
 
         for layer in self.layers:
             output, topk_probs, topk_idx  = layer(output, src_mask=mask,
-                           src_key_padding_mask=src_key_padding_mask, pos=pos)
-            
+                           src_key_padding_mask=src_key_padding_mask, pos=pos, return_aux = self.return_aux)
+
             if self.return_aux:
                 if all_aux_loss is None:
-                    all_aux_loss = moe_aux_loss(topk_probs, topk_idx, layer.num_experts)
+                    all_aux_loss = (1/self.num_layers) * moe_aux_loss(topk_probs, topk_idx, layer.num_experts)
                 else:
                     aux_loss_layer = moe_aux_loss(topk_probs, topk_idx, layer.num_experts)
-                    all_aux_loss += aux_loss_layer
+                    all_aux_loss += (1/self.num_layers) * aux_loss_layer
 
         if self.norm is not None:
             output = self.norm(output)
@@ -347,14 +348,14 @@ class TransformerDecoderMoE(nn.Module):
                            memory_mask=memory_mask,
                            tgt_key_padding_mask=tgt_key_padding_mask,
                            memory_key_padding_mask=memory_key_padding_mask,
-                           pos=pos, query_pos=query_pos)
+                           pos=pos, query_pos=query_pos, return_aux = self.return_aux)
             
             if self.return_aux:
                 if all_aux_loss is None:
-                    all_aux_loss = moe_aux_loss(topk_probs, topk_idx, layer.num_experts)
+                    all_aux_loss = (1/self.num_layers) * moe_aux_loss(topk_probs, topk_idx, layer.num_experts)
                 else:
                     aux_loss_layer = moe_aux_loss(topk_probs, topk_idx, layer.num_experts)
-                    all_aux_loss += aux_loss_layer
+                    all_aux_loss += (1/self.num_layers) * aux_loss_layer
             
             if self.return_intermediate:
                 intermediate.append(self.norm(output))
@@ -366,7 +367,7 @@ class TransformerDecoderMoE(nn.Module):
                 intermediate.append(output)
 
         if self.return_intermediate:
-            return torch.stack(intermediate)
+            return torch.stack(intermediate), all_aux_loss
 
         return output.unsqueeze(0), all_aux_loss
 
@@ -395,7 +396,7 @@ def moe_aux_loss(gate_outputs, topk_idx, num_experts):
     # Normalize
     expert_prob = expert_usage / expert_usage.sum()
     loss = (expert_prob * torch.log(expert_prob + 1e-9)).sum()  # entropy
-    return loss
+    return -loss
 
 
 def _get_clones(module, N):

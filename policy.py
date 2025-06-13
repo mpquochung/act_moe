@@ -12,7 +12,11 @@ class ACTPolicy(nn.Module):
         model, optimizer = build_ACT_model_and_optimizer(args_override)
         self.model = model # CVAE decoder
         self.optimizer = optimizer
+        self.is_aux_loss = args_override['aux_loss']
         self.kl_weight = args_override['kl_weight']
+        self.encoder_aux_weight = args_override['encoder_aux_weight']
+        self.decoder_aux_weight = args_override['decoder_aux_weight']
+        self.aux_weight = args_override['aux_weight']
         print(f'KL Weight {self.kl_weight}')
 
     def __call__(self, qpos, image, actions=None, is_pad=None):
@@ -24,17 +28,27 @@ class ACTPolicy(nn.Module):
             actions = actions[:, :self.model.num_queries]
             is_pad = is_pad[:, :self.model.num_queries]
 
-            a_hat, is_pad_hat, (mu, logvar) = self.model(qpos, image, env_state, actions, is_pad)
+            a_hat, is_pad_hat, (mu, logvar), encoder_aux_loss, decoder_aux_loss = self.model(qpos, image, env_state, actions, is_pad)
             total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar)
             loss_dict = dict()
             all_l1 = F.l1_loss(actions, a_hat, reduction='none')
             l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
+            if self.is_aux_loss:
+                aux_loss = self.encoder_aux_weight * encoder_aux_loss + self.decoder_aux_weight * decoder_aux_loss
+                loss_dict['aux_loss'] = aux_loss
+
             loss_dict['l1'] = l1
             loss_dict['kl'] = total_kld[0]
-            loss_dict['loss'] = loss_dict['l1'] + loss_dict['kl'] * self.kl_weight
+
+            if self.is_aux_loss:
+                loss_dict['loss'] = loss_dict['l1'] + loss_dict['kl'] * self.kl_weight + loss_dict['aux_loss'] * self.aux_weight
+
+            else:
+                loss_dict['loss'] = loss_dict['l1'] + loss_dict['kl'] * self.kl_weight
+
             return loss_dict
         else: # inference time
-            a_hat, _, (_, _) = self.model(qpos, image, env_state) # no action, sample from prior
+            a_hat, _, (_, _), _, _ = self.model(qpos, image, env_state) # no action, sample from prior
             return a_hat
 
     def configure_optimizers(self):
