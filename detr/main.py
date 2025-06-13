@@ -63,6 +63,8 @@ def get_args_parser():
             raise argparse.ArgumentTypeError('Boolean value expected.')
 
     parser.add_argument('--is_moe', type=str2bool, required=True, help='Use Mixture-of-Experts (True/False)')
+    parser.add_argument('--aux_loss', type=str2bool, required=False, help='Use auxiliary Loss for MoE (True/False)', default=False)
+
 
     # repeat args in imitate_episodes just to avoid error. Will not be used
     parser.add_argument('--eval', action='store_true')

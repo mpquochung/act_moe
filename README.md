@@ -67,7 +67,7 @@ To visualize the episode after it is collected, run
 
     python3 visualize_episodes.py --dataset_dir <data save dir> --episode_idx 0
 
-To train ACT:
+To train ACT with MoE and Aux Loss:
     
     # Transfer Cube task
     python3 imitate_episodes.py \
@@ -75,7 +75,7 @@ To train ACT:
     --ckpt_dir <ckpt dir> \
     --policy_class ACT --kl_weight 10 --chunk_size 100 --hidden_dim 512 --batch_size 8 --dim_feedforward 3200 \
     --num_epochs 2000  --lr 1e-5 \
-    --seed 0
+    --seed 0 --num_experts 4 --top_k 2 --is_moe True --aux_loss True
 
 
 To evaluate the policy, run the same command but add ``--eval``. This loads the best validation checkpoint.
