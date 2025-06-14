@@ -32,6 +32,7 @@ def main(args):
     batch_size_train = args['batch_size']
     batch_size_val = args['batch_size']
     num_epochs = args['num_epochs']
+    ckpt_name = args['ckpt_name']
 
     # get task parameters
     is_sim = task_name[:4] == 'sim_'
@@ -92,7 +93,7 @@ def main(args):
     }
 
     if is_eval:
-        ckpt_names = [f'policy_best.ckpt']
+        ckpt_names = [f'{ckpt_name}.ckpt']
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
@@ -328,10 +329,17 @@ def train_bc(train_dataloader, val_dataloader, config):
     seed = config['seed']
     policy_class = config['policy_class']
     policy_config = config['policy_config']
+    ckpt_name = config['ckpt_name']
 
     set_seed(seed)
 
     policy = make_policy(policy_class, policy_config)
+
+    if ckpt_name:
+        ckpt_path = os.path.join(ckpt_dir, f"{ckpt_name}.ckpt")
+        load_status = policy.load_state_dict(torch.load(ckpt_path))
+        print(load_status)
+
     policy.cuda()
     optimizer = make_optimizer(policy_class, policy)
 
@@ -436,6 +444,7 @@ if __name__ == '__main__':
     parser.add_argument('--seed', action='store', type=int, help='seed', required=True)
     parser.add_argument('--num_epochs', action='store', type=int, help='num_epochs', required=True)
     parser.add_argument('--lr', action='store', type=float, help='lr', required=True)
+    parser.add_argument('--ckpt_name', action='store', type=str, help='check point name', required=False)
 
     # for ACT
 
