@@ -77,7 +77,8 @@ def get_args_parser():
     parser.add_argument('--num_experts', action='store', type=int, help='num_experts', required=False, default=4)
     parser.add_argument('--top_k', action='store', type=int, help='top_k', required=False, default=2)
     parser.add_argument('--temporal_agg', action='store_true')
-
+    parser.add_argument('--ckpt_name', action='store', type=str, help='check point name', required=False)
+    
     return parser
 
 

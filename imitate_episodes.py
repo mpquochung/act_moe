@@ -79,6 +79,7 @@ def main(args):
     config = {
         'num_epochs': num_epochs,
         'ckpt_dir': ckpt_dir,
+        'ckpt_name': ckpt_name,
         'episode_len': episode_len,
         'state_dim': state_dim,
         'lr': args['lr'],

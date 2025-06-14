@@ -257,7 +257,8 @@ python imitate_episodes.py \
     --seed 1000 \
     --num_experts 4 \
     --top_k 2 \
-    --is_moe True
+    --is_moe True \
+    
 
 # 2. sim_insertion_human (eval, MoE)
 python imitate_episodes.py \
@@ -275,4 +276,77 @@ python imitate_episodes.py \
     --num_experts 4 \
     --top_k 2 \
     --is_moe True \
-    --eval
+    --ckpt_name policy_best \
+    --eval  
+
+python imitate_episodes.py \
+    --task_name sim_insertion_human \
+    --ckpt_dir checkpoints/sim_insertion_human/moe \
+    --policy_class ACT \
+    --kl_weight 10 \
+    --chunk_size 100 \
+    --hidden_dim 512 \
+    --batch_size 28 \
+    --dim_feedforward 3200 \
+    --num_epochs 2000 \
+    --lr 3e-5 \
+    --seed 1000 \
+    --num_experts 4 \
+    --top_k 2 \
+    --is_moe True \
+    --is_moe 
+
+python imitate_episodes.py \
+    --task_name sim_insertion_human \
+    --ckpt_dir checkpoints/sim_insertion_human/moe \
+    --policy_class ACT \
+    --kl_weight 10 \
+    --chunk_size 100 \
+    --hidden_dim 512 \
+    --batch_size 28 \
+    --dim_feedforward 3200 \
+    --num_epochs 2000 \
+    --lr 3e-5 \
+    --seed 1000 \
+    --num_experts 4 \
+    --top_k 2 \
+    --is_moe True \
+    --ckpt_name policy_best \
+    --eval  
+
+# CONTINUOUS TRAINING
+python imitate_episodes.py \
+    --task_name sim_insertion_human \
+    --ckpt_dir checkpoints/sim_insertion_human/finetune \
+    --policy_class ACT \
+    --kl_weight 10 \
+    --chunk_size 100 \
+    --hidden_dim 512 \
+    --batch_size 28 \
+    --dim_feedforward 3200 \
+    --num_epochs 1000 \
+    --lr 2e-5 \
+    --seed 1000 \
+    --num_experts 4 \
+    --top_k 2 \
+    --is_moe True \
+    --ckpt_name policy_last 
+
+
+# Continuos trainng
+python imitate_episodes.py \
+    --task_name sim_insertion_scripted \
+    --ckpt_dir checkpoints/sim_insertion_scripted/finetune \
+    --policy_class ACT \
+    --kl_weight 10 \
+    --chunk_size 100 \
+    --hidden_dim 512 \
+    --batch_size 28 \
+    --dim_feedforward 3200 \
+    --num_epochs 1000 \
+    --lr 2e-5 \
+    --seed 1000 \
+    --num_experts 4 \
+    --top_k 2 \
+    --is_moe True \
+    --ckpt_name policy_last 
