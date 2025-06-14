@@ -20,7 +20,7 @@ class TransformerMoE(nn.Module):
 
         encoder_layer = TransformerEncoderLayerWithMoE(d_model, nhead, dim_feedforward,
                                                 dropout, activation, normalize_before, num_experts, top_k)
-        encoder_norm = nn.RMSNorm(d_model) if normalize_before else None
+        encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
         self.encoder = TransformerEncoderMoE(encoder_layer, num_encoder_layers, encoder_norm, aux_loss)
 
         decoder_layer = TransformerDecoderLayerWithMoE(d_model, nhead, dim_feedforward,
@@ -128,8 +128,8 @@ class TransformerEncoderLayerWithMoE(TransformerEncoderLayer):
         self.num_experts = num_experts
         self.top_k = top_k
         self.moe_layer = MoELayer(d_model, dim_feedforward, self.num_experts, self.top_k)
-        self.norm1 = nn.RMSNorm(d_model)
-        self.norm2 = nn.RMSNorm(d_model)
+        # self.norm1 = nn.RMSNorm(d_model)
+        # self.norm2 = nn.RMSNorm(d_model)
 
     def forward_post(self,
                      src,
