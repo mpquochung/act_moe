@@ -104,11 +104,8 @@ class DETRVAE(nn.Module):
             pos_embed = self.pos_table.clone().detach()
             pos_embed = pos_embed.permute(1, 0, 2)  # (seq+1, 1, hidden_dim)
             # query model
-            if self.aux_loss:
-                encoder_output, encoder_query_aux_loss = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
+            encoder_output, encoder_query_aux_loss = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
 
-            else:
-                encoder_output = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
 
             encoder_output = encoder_output[0] # take cls output only
             latent_info = self.latent_proj(encoder_output)
@@ -161,8 +158,6 @@ class DETRVAE(nn.Module):
             encoder_aux_loss += encoder_query_aux_loss
         
         return a_hat, is_pad_hat, [mu, logvar], encoder_aux_loss, decoder_aux_loss
-     
-
 
 
 class CNNMLP(nn.Module):
@@ -273,7 +268,7 @@ def build_encoder_moe(args):
 def build(args):
     state_dim = 14 # TODO hardcode
 
-    # From state
+    # From state 
     # backbone = None # from state for now, no need for conv nets
     # From image
     backbones = []

@@ -1,7 +1,7 @@
 from .transformer import TransformerDecoderLayer, TransformerEncoderLayer, TransformerEncoder, TransformerDecoder
 
 import copy
-from typing import Optional, List
+from typing import Optional, List, Union, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -69,7 +69,10 @@ class TransformerMoE(nn.Module):
                           pos=pos_embed, query_pos=query_embed)
         hs = hs.transpose(1, 2)
 
-        return hs, encoder_aux_loss, decoder_aux_loss
+        if self.return_aux:
+            return hs, encoder_aux_loss, decoder_aux_loss
+        else:
+            return hs
 
 
 class Expert(nn.Module):
@@ -116,20 +119,28 @@ class MoELayer(nn.Module):
                 expert_outputs[mask] += expert_prob[mask] * outputs
 
         if return_aux:
-            return expert_outputs.view(seq_len, batch_size, dim), topk_probs, topk_idx
+            return expert_outputs.view(seq_len, batch_size, dim), scores, topk_idx
 
         return expert_outputs.view(seq_len, batch_size, dim)
     
-class TransformerEncoderLayerWithMoE(TransformerEncoderLayer):
+class TransformerEncoderLayerWithMoE(nn.Module):
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
                  activation="relu", normalize_before=False, num_experts=4, top_k=2):
-        super().__init__(d_model, nhead, dim_feedforward, dropout, activation, normalize_before)
+        super().__init__()
 
         self.num_experts = num_experts
         self.top_k = top_k
         self.moe_layer = MoELayer(d_model, dim_feedforward, self.num_experts, self.top_k)
-        # self.norm1 = nn.RMSNorm(d_model)
-        # self.norm2 = nn.RMSNorm(d_model)
+        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.multihead_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+
+        self.activation = _get_activation_fn(activation)
+        self.normalize_before = normalize_before
 
     def forward_post(self,
                      src,
@@ -143,11 +154,11 @@ class TransformerEncoderLayerWithMoE(TransformerEncoderLayer):
         src = self.norm1(src)
 
         if return_aux:
-            src2, topk_probs, topk_idx = self.moe_layer(src, return_aux = return_aux) 
+            src2, gate_logits, topk_idx = self.moe_layer(src, return_aux = return_aux) 
             src = src + self.dropout2(src2)
             src = self.norm2(src)
             
-            return src, topk_probs, topk_idx
+            return src, gate_logits, topk_idx
         
         else:
             src2 = self.moe_layer(src) 
@@ -168,10 +179,10 @@ class TransformerEncoderLayerWithMoE(TransformerEncoderLayer):
         src = src + self.dropout1(src2)
         src2 = self.norm2(src)
         if return_aux:
-            src2, topk_probs, topk_idx = self.moe_layer(src2, return_aux)
+            src2, gate_logits, topk_idx = self.moe_layer(src2, return_aux)
             src = src + self.dropout2(src2)
         
-            return src, topk_probs, topk_idx
+            return src, gate_logits, topk_idx
         
         else:
             src2 = self.moe_layer(src2)
@@ -188,20 +199,26 @@ class TransformerEncoderLayerWithMoE(TransformerEncoderLayer):
             return self.forward_pre(src, src_mask, src_key_padding_mask, pos, return_aux)
         return self.forward_post(src, src_mask, src_key_padding_mask, pos, return_aux)
 
-class TransformerDecoderLayerWithMoE(TransformerDecoderLayer):
+class TransformerDecoderLayerWithMoE(nn.Module):
 
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
                  activation="relu", normalize_before=False, num_experts = 4, top_k = 2):
-        super().__init__(d_model, nhead, dim_feedforward, dropout, activation, normalize_before)
+        super().__init__()
 
         self.num_experts = num_experts
         self.top_k = top_k
         
         self.moe_layer = MoELayer(d_model, dim_feedforward, self.num_experts, self.top_k)
 
-        self.norm1 = nn.RMSNorm(d_model)
-        self.norm2 = nn.RMSNorm(d_model)
-        self.norm3 = nn.RMSNorm(d_model)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.norm3 = nn.LayerNorm(d_model)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+        self.dropout3 = nn.Dropout(dropout)
+
+        self.activation = _get_activation_fn(activation)
+        self.normalize_before = normalize_before
  
 
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
@@ -234,10 +251,10 @@ class TransformerDecoderLayerWithMoE(TransformerDecoderLayer):
             return tgt, None, None
         
         else:
-            tgt2, topk_probs, topk_idx = self.moe_layer(tgt, return_aux= return_aux)
+            tgt2, gate_logits, topk_idx = self.moe_layer(tgt, return_aux= return_aux)
             tgt = tgt + self.dropout3(tgt2)
             tgt = self.norm3(tgt)
-            return tgt, topk_probs, topk_idx
+            return tgt, gate_logits, topk_idx
 
     def forward_pre(self, tgt, memory,
                     tgt_mask: Optional[Tensor] = None,
@@ -261,9 +278,9 @@ class TransformerDecoderLayerWithMoE(TransformerDecoderLayer):
         tgt2 = self.norm3(tgt)
 
         if return_aux:
-            tgt2, topk_probs, topk_idx = self.moe_layer(tgt2)
+            tgt2, gate_logits, topk_idx = self.moe_layer(tgt2)
             tgt = tgt + self.dropout3(tgt2)
-            return tgt, topk_probs, topk_idx
+            return tgt, gate_logits, topk_idx
         else:
 
             tgt2 = self.moe_layer(tgt2)
@@ -301,23 +318,24 @@ class TransformerEncoderMoE(nn.Module):
                 pos: Optional[Tensor] = None):
         output = src
 
-        all_aux_loss = None
+        gate_logits_per_layer = []
 
         for layer in self.layers:
-            output, topk_probs, topk_idx  = layer(output, src_mask=mask,
+            output, gate_logits, topk_idx  = layer(output, src_mask=mask,
                            src_key_padding_mask=src_key_padding_mask, pos=pos, return_aux = self.return_aux)
 
             if self.return_aux:
-                if all_aux_loss is None:
-                    all_aux_loss = (1/self.num_layers) * moe_aux_loss(topk_probs, topk_idx, layer.num_experts)
-                else:
-                    aux_loss_layer = moe_aux_loss(topk_probs, topk_idx, layer.num_experts)
-                    all_aux_loss += (1/self.num_layers) * aux_loss_layer
+                gate_logits_per_layer.append(gate_logits)
 
         if self.norm is not None:
             output = self.norm(output)
-        
-        return output, all_aux_loss
+
+        if self.return_aux:
+            aux_loss = load_balancing_loss_func(tuple(gate_logits_per_layer), num_experts=self.layers[0].num_experts, top_k=self.layers[0].top_k)
+        else:
+            aux_loss = None
+
+        return output, aux_loss
     
 
 class TransformerDecoderMoE(nn.Module):
@@ -341,21 +359,17 @@ class TransformerDecoderMoE(nn.Module):
 
         intermediate = []
 
-        all_aux_loss = None
+        gate_logits_per_layer = []
 
         for layer in self.layers:
-            output, topk_probs, topk_idx = layer(output, memory, tgt_mask=tgt_mask,
+            output, gate_logits, topk_idx = layer(output, memory, tgt_mask=tgt_mask,
                            memory_mask=memory_mask,
                            tgt_key_padding_mask=tgt_key_padding_mask,
                            memory_key_padding_mask=memory_key_padding_mask,
                            pos=pos, query_pos=query_pos, return_aux = self.return_aux)
             
             if self.return_aux:
-                if all_aux_loss is None:
-                    all_aux_loss = (1/self.num_layers) * moe_aux_loss(topk_probs, topk_idx, layer.num_experts)
-                else:
-                    aux_loss_layer = moe_aux_loss(topk_probs, topk_idx, layer.num_experts)
-                    all_aux_loss += (1/self.num_layers) * aux_loss_layer
+                gate_logits_per_layer.append(gate_logits)
             
             if self.return_intermediate:
                 intermediate.append(self.norm(output))
@@ -366,10 +380,15 @@ class TransformerDecoderMoE(nn.Module):
                 intermediate.pop()
                 intermediate.append(output)
 
-        if self.return_intermediate:
-            return torch.stack(intermediate), all_aux_loss
+        if self.return_aux:
+            aux_loss = load_balancing_loss_func(tuple(gate_logits_per_layer), num_experts=self.layers[0].num_experts, top_k=self.layers[0].top_k)
+        else:
+            aux_loss = None
 
-        return output.unsqueeze(0), all_aux_loss
+        if self.return_intermediate:
+            return torch.stack(intermediate), aux_loss
+
+        return output.unsqueeze(0), aux_loss
 
 
 def _get_activation_fn(activation):
@@ -382,21 +401,102 @@ def _get_activation_fn(activation):
         return F.glu
     raise RuntimeError(F"activation should be relu/gelu, not {activation}.")
 
-def moe_aux_loss(gate_outputs, topk_idx, num_experts):
-    """
-    gate_outputs: softmax(topk_vals), shape [batch_size * seq_len, top_k]
-    topk_idx: indices of top-k experts, shape [batch_size * seq_len, top_k]
-    """
-    # Count how many tokens are routed to each expert
-    expert_usage = torch.zeros(num_experts, device=topk_idx.device)
-    for i in range(topk_idx.size(1)):  # loop over top-k
-        expert_ids = topk_idx[:, i]
-        expert_usage.scatter_add_(0, expert_ids, gate_outputs[:, i])
+# def moe_aux_loss(gate_outputs, topk_idx, num_experts):
+#     """
+#     gate_outputs: softmax(topk_vals), shape [batch_size * seq_len, top_k]
+#     topk_idx: indices of top-k experts, shape [batch_size * seq_len, top_k]
+#     """
+#     # Count token assigned to each expert
+#     expert_usage = torch.zeros(num_experts, device=topk_idx.device)
+#     for i in range(topk_idx.size(1)):
+#         expert_ids = topk_idx[:, i]
+#         expert_usage.scatter_add_(0, expert_ids, gate_outputs[:, i])
 
-    # Normalize
-    expert_prob = expert_usage / expert_usage.sum()
-    loss = (expert_prob * torch.log(expert_prob + 1e-9)).sum()  # entropy
-    return -loss
+#     expert_prob = expert_usage / expert_usage.sum()
+#     loss = (expert_prob * torch.log(expert_prob + 1e-9)).sum()  
+#     return -loss
+
+
+def load_balancing_loss_func(
+    gate_logits: Union[torch.Tensor, Tuple[torch.Tensor], None],
+    num_experts: Optional[int] = None,
+    top_k=2,
+    attention_mask: Optional[torch.Tensor] = None,
+) -> Union[torch.Tensor, int]:
+    r"""
+    Computes auxiliary load balancing loss as in Switch Transformer - implemented in Pytorch.
+
+    See Switch Transformer (https://huggingface.co/papers/2101.03961) for more details. This function implements the loss
+    function presented in equations (4) - (6) of the paper. It aims at penalizing cases where the routing between
+    experts is too unbalanced.
+
+    Args:
+        gate_logits:
+            Logits from the `gate`, should be a tuple of model.config.num_hidden_layers tensors of
+            shape [batch_size X sequence_length, num_experts].
+        num_experts:
+            Number of experts
+        top_k:
+            The number of experts to route per-token, can be also interpreted as the `top-k` routing
+            parameter.
+        attention_mask (`torch.Tensor`, *optional*):
+            The attention_mask used in forward function
+            shape [batch_size X sequence_length] if not None.
+
+    Returns:
+        The auxiliary loss.
+    """
+    if gate_logits is None or not isinstance(gate_logits, tuple):
+        return 0
+
+    if isinstance(gate_logits, tuple):
+        compute_device = gate_logits[0].device
+        concatenated_gate_logits = torch.cat([layer_gate.to(compute_device) for layer_gate in gate_logits], dim=0)
+
+    routing_weights = torch.nn.functional.softmax(concatenated_gate_logits, dim=-1)
+
+    _, selected_experts = torch.topk(routing_weights, top_k, dim=-1)
+
+    expert_mask = torch.nn.functional.one_hot(selected_experts, num_experts)
+
+    if attention_mask is None:
+        # Compute the percentage of tokens routed to each experts
+        tokens_per_expert = torch.mean(expert_mask.float(), dim=0)
+
+        # Compute the average probability of routing to these experts
+        router_prob_per_expert = torch.mean(routing_weights, dim=0)
+    else:
+        batch_size, sequence_length = attention_mask.shape
+        num_hidden_layers = concatenated_gate_logits.shape[0] // (batch_size * sequence_length)
+
+        # Compute the mask that masks all padding tokens as 0 with the same shape of expert_mask
+        expert_attention_mask = (
+            attention_mask[None, :, :, None, None]
+            .expand((num_hidden_layers, batch_size, sequence_length, top_k, num_experts))
+            .reshape(-1, top_k, num_experts)
+            .to(compute_device)
+        )
+
+        # Compute the percentage of tokens routed to each experts
+        tokens_per_expert = torch.sum(expert_mask.float() * expert_attention_mask, dim=0) / torch.sum(
+            expert_attention_mask, dim=0
+        )
+
+        # Compute the mask that masks all padding tokens as 0 with the same shape of tokens_per_expert
+        router_per_expert_attention_mask = (
+            attention_mask[None, :, :, None]
+            .expand((num_hidden_layers, batch_size, sequence_length, num_experts))
+            .reshape(-1, num_experts)
+            .to(compute_device)
+        )
+
+        # Compute the average probability of routing to these experts
+        router_prob_per_expert = torch.sum(routing_weights * router_per_expert_attention_mask, dim=0) / torch.sum(
+            router_per_expert_attention_mask, dim=0
+        )
+
+    overall_loss = torch.sum(tokens_per_expert * router_prob_per_expert.unsqueeze(0))
+    return overall_loss * num_experts
 
 
 def _get_clones(module, N):
