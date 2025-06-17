@@ -318,14 +318,14 @@ class TransformerEncoderMoE(nn.Module):
                 pos: Optional[Tensor] = None):
         output = src
 
-        gate_logits_per_layer = []
+        gate_logits_per_layer = tuple()
 
         for layer in self.layers:
             output, gate_logits, topk_idx  = layer(output, src_mask=mask,
                            src_key_padding_mask=src_key_padding_mask, pos=pos, return_aux = self.return_aux)
 
             if self.return_aux:
-                gate_logits_per_layer.append(gate_logits)
+                gate_logits_per_layer += (gate_logits,)
 
         if self.norm is not None:
             output = self.norm(output)
@@ -359,7 +359,7 @@ class TransformerDecoderMoE(nn.Module):
 
         intermediate = []
 
-        gate_logits_per_layer = []
+        gate_logits_per_layer = tuple()
 
         for layer in self.layers:
             output, gate_logits, topk_idx = layer(output, memory, tgt_mask=tgt_mask,
@@ -369,7 +369,7 @@ class TransformerDecoderMoE(nn.Module):
                            pos=pos, query_pos=query_pos, return_aux = self.return_aux)
             
             if self.return_aux:
-                gate_logits_per_layer.append(gate_logits)
+                gate_logits_per_layer += (gate_logits,)
             
             if self.return_intermediate:
                 intermediate.append(self.norm(output))
@@ -401,20 +401,20 @@ def _get_activation_fn(activation):
         return F.glu
     raise RuntimeError(F"activation should be relu/gelu, not {activation}.")
 
-# def moe_aux_loss(gate_outputs, topk_idx, num_experts):
-#     """
-#     gate_outputs: softmax(topk_vals), shape [batch_size * seq_len, top_k]
-#     topk_idx: indices of top-k experts, shape [batch_size * seq_len, top_k]
-#     """
-#     # Count token assigned to each expert
-#     expert_usage = torch.zeros(num_experts, device=topk_idx.device)
-#     for i in range(topk_idx.size(1)):
-#         expert_ids = topk_idx[:, i]
-#         expert_usage.scatter_add_(0, expert_ids, gate_outputs[:, i])
+def entropy_aux_loss_func(gate_outputs, topk_idx, num_experts):
+    """
+    gate_outputs: softmax(topk_vals), shape [batch_size * seq_len, top_k]
+    topk_idx: indices of top-k experts, shape [batch_size * seq_len, top_k]
+    """
+    # Count token assigned to each expert
+    expert_usage = torch.zeros(num_experts, device=topk_idx.device)
+    for i in range(topk_idx.size(1)):
+        expert_ids = topk_idx[:, i]
+        expert_usage.scatter_add_(0, expert_ids, gate_outputs[:, i])
 
-#     expert_prob = expert_usage / expert_usage.sum()
-#     loss = (expert_prob * torch.log(expert_prob + 1e-9)).sum()  
-#     return -loss
+    expert_prob = expert_usage / expert_usage.sum()
+    loss = (expert_prob * torch.log(expert_prob + 1e-9)).sum()  
+    return -loss
 
 
 def load_balancing_loss_func(
