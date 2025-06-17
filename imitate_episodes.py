@@ -272,7 +272,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 else:
                     raise NotImplementedError
                 
-                print(raw_action.shape)
+                # print(raw_action.shape)
 
                 ### post-process actions
                 raw_action = raw_action.squeeze(0).cpu().numpy()
@@ -362,32 +362,34 @@ def train_bc(train_dataloader, val_dataloader, config):
             if epoch_val_loss < min_val_loss:
                 min_val_loss = epoch_val_loss
                 best_ckpt_info = (epoch, min_val_loss, deepcopy(policy.state_dict()))
-        print(f'Val loss:   {epoch_val_loss:.5f}')
+        tqdm.write(f'Val loss:   {epoch_val_loss:.5f}')
         summary_string = ''
         for k, v in epoch_summary.items():
             summary_string += f'{k}: {v.item():.3f} '
-        print(summary_string)
+        tqdm.write(summary_string)
 
         # training
         policy.train()
         optimizer.zero_grad()
         for batch_idx, data in enumerate(train_dataloader):
+            start = time.time()
             forward_dict = forward_pass(data, policy)
+            tqdm.write("Forward take:", time.time() - start)
             # backward
             start = time.time()
             loss = forward_dict['loss']
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
-            print("Backward take:", time.time() - start)
+            tqdm.write("Backward take:", time.time() - start)
             train_history.append(detach_dict(forward_dict))
         epoch_summary = compute_dict_mean(train_history[(batch_idx+1)*epoch:(batch_idx+1)*(epoch+1)])
         epoch_train_loss = epoch_summary['loss']
-        print(f'Train loss: {epoch_train_loss:.5f}')
+        tqdm.write(f'Train loss: {epoch_train_loss:.5f}')
         summary_string = ''
         for k, v in epoch_summary.items():
             summary_string += f'{k}: {v.item():.3f} '
-        print(summary_string)
+        tqdm.write(summary_string)
 
         if epoch % 200 == 0:
             ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{epoch}_seed_{seed}.ckpt')
