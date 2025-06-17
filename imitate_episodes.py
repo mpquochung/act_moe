@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from copy import deepcopy
 from tqdm import tqdm
 from einops import rearrange
+import time
 
 from constants import DT
 from constants import PUPPET_GRIPPER_JOINT_OPEN
@@ -373,10 +374,12 @@ def train_bc(train_dataloader, val_dataloader, config):
         for batch_idx, data in enumerate(train_dataloader):
             forward_dict = forward_pass(data, policy)
             # backward
+            start = time.time()
             loss = forward_dict['loss']
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
+            print("Backward take:", time.time() - start)
             train_history.append(detach_dict(forward_dict))
         epoch_summary = compute_dict_mean(train_history[(batch_idx+1)*epoch:(batch_idx+1)*(epoch+1)])
         epoch_train_loss = epoch_summary['loss']
