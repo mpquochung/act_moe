@@ -25,7 +25,7 @@ class TransformerMoE(nn.Module):
 
         decoder_layer = TransformerDecoderLayerWithMoE(d_model, nhead, dim_feedforward,
                                                 dropout, activation, normalize_before, num_experts, top_k)
-        decoder_norm = nn.RMSNorm(d_model)
+        decoder_norm = nn.LayerNorm(d_model)
         self.decoder = TransformerDecoder(decoder_layer, num_decoder_layers, decoder_norm,
                                           return_intermediate=return_intermediate_dec)
 
@@ -174,9 +174,9 @@ class TransformerDecoderLayerWithMoE(TransformerDecoderLayer):
         
         self.moe_layer = MoELayer(d_model, dim_feedforward, num_experts, top_k)
 
-        self.norm1 = nn.RMSNorm(d_model)
-        self.norm2 = nn.RMSNorm(d_model)
-        self.norm3 = nn.RMSNorm(d_model)
+        # self.norm1 = nn.RMSNorm(d_model)
+        # self.norm2 = nn.RMSNorm(d_model)
+        # self.norm3 = nn.RMSNorm(d_model)
 
 
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
