@@ -348,9 +348,11 @@ def train_bc(train_dataloader, val_dataloader, config):
     validation_history = []
     min_val_loss = np.inf
     best_ckpt_info = None
+    import time
     for epoch in tqdm(range(num_epochs)):
         print(f'\nEpoch {epoch}')
         # validation
+        start = time.time()
         with torch.inference_mode():
             policy.eval()
             epoch_dicts = []
@@ -369,18 +371,22 @@ def train_bc(train_dataloader, val_dataloader, config):
         for k, v in epoch_summary.items():
             summary_string += f'{k}: {v.item():.3f} '
         print(summary_string)
-
+        print('Eval take:', time.time()-start)
         # training
         policy.train()
         optimizer.zero_grad()
         for batch_idx, data in enumerate(train_dataloader):
+            start = time.time()
             forward_dict = forward_pass(data, policy)
+            print('Forward take:', time.time()-start)
             # backward
+            start = time.time()
             loss = forward_dict['loss']
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
             train_history.append(detach_dict(forward_dict))
+            print('Backward take:', time.time()-start)
         epoch_summary = compute_dict_mean(train_history[(batch_idx+1)*epoch:(batch_idx+1)*(epoch+1)])
         epoch_train_loss = epoch_summary['loss']
         print(f'Train loss: {epoch_train_loss:.5f}')
@@ -389,7 +395,7 @@ def train_bc(train_dataloader, val_dataloader, config):
             summary_string += f'{k}: {v.item():.3f} '
         print(summary_string)
 
-        if epoch % 100 == 0:
+        if epoch % 200 == 0:
             ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{epoch}_seed_{seed}.ckpt')
             torch.save(policy.state_dict(), ckpt_path)
             plot_history(train_history, validation_history, epoch, ckpt_dir, seed)
