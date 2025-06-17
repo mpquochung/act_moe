@@ -144,3 +144,7 @@ desmontrations/*
 checkpoints/*
 
 test.py
+
+training_scripts/*
+
+draft.py

@@ -34,7 +34,7 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 
 class DETRVAE(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names, aux_loss = False):
+    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names, aux_loss = False, is_moe = False):
         """ Initializes the model.
         Parameters:
             backbones: torch module of the backbone to be used. See backbone.py
@@ -51,6 +51,7 @@ class DETRVAE(nn.Module):
         self.encoder = encoder
         hidden_dim = transformer.d_model
         self.aux_loss = aux_loss
+        self.is_moe = is_moe
         self.action_head = nn.Linear(hidden_dim, state_dim)
         self.is_pad_head = nn.Linear(hidden_dim, 1)
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
@@ -104,7 +105,12 @@ class DETRVAE(nn.Module):
             pos_embed = self.pos_table.clone().detach()
             pos_embed = pos_embed.permute(1, 0, 2)  # (seq+1, 1, hidden_dim)
             # query model
-            encoder_output, encoder_query_aux_loss = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
+
+            if self.is_moe:
+                encoder_output, encoder_query_aux_loss = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
+            
+            else:
+                encoder_output = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
 
 
             encoder_output = encoder_output[0] # take cls output only
@@ -303,7 +309,8 @@ def build(args):
         state_dim=state_dim,
         num_queries=args.num_queries,
         camera_names=args.camera_names,
-        aux_loss= args.aux_loss
+        aux_loss= args.aux_loss,
+        is_moe = args.is_moe
     )
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
