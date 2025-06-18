@@ -25,7 +25,7 @@ class TransformerMoE(nn.Module):
 
         decoder_layer = TransformerDecoderLayerWithMoE(d_model, nhead, dim_feedforward,
                                                 dropout, activation, normalize_before, num_experts, top_k)
-        decoder_norm = nn.RMSNorm(d_model)
+        decoder_norm = nn.LayerNorm(d_model)
         self.decoder = TransformerDecoderMoE(decoder_layer, num_decoder_layers, decoder_norm,
                                           return_intermediate=return_intermediate_dec, return_aux=aux_loss)
 
