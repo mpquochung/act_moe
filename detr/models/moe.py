@@ -114,13 +114,55 @@ class MoELayer(nn.Module):
 
         return expert_outputs.view(seq_len, batch_size, dim)
     
+
+
+class MoELayerLoadBalance(nn.Module):
+    def __init__(self, d_model, dim_feedforward, num_experts=4, top_k=2):
+        super().__init__()
+        self.num_experts = num_experts
+        self.top_k = top_k
+        self.experts = nn.ModuleList([Expert(d_model, dim_feedforward) for _ in range(num_experts)])
+        self.gate = nn.Linear(d_model, num_experts)
+        self.expert_biases = nn.Parameter(torch.zeros(num_experts))
+
+    def forward(self, x):
+        # x: [seq_len, batch, dim]
+        seq_len, batch_size, dim = x.size()
+        x_flat = x.view(-1, dim)  # [seq_len * batch, dim]
+
+        scores = self.gate(x_flat)  # [seq_len * batch, num_experts]
+        gate_probs = torch.sigmoid(scores)
+        gate_logits = scores + self.expert_biases
+
+        _, topk_idx = torch.topk(gate_logits, self.top_k, dim=-1)  # [seq_len * batch, k]
+        top_k_probs = gate_probs.gather(-1, topk_idx)  # [seq_len * batch, k]
+        
+        top_k_probs = top_k_probs / top_k_probs.sum(dim=-1, keepdim=True)
+
+        expert_outputs = torch.zeros_like(x_flat)
+
+        for i in range(self.top_k):
+            expert_idx = topk_idx[:, i]
+            expert_prob = top_k_probs[:, i].unsqueeze(-1)
+
+            for e_idx in range(self.num_experts):
+                mask = (expert_idx == e_idx)
+                if mask.sum() == 0:
+                    continue
+                selected_inputs = x_flat[mask]
+                outputs = self.experts[e_idx](selected_inputs)
+                expert_outputs[mask] += expert_prob[mask] * outputs
+
+        return expert_outputs.view(seq_len, batch_size, dim)
+
+
 class TransformerEncoderLayerWithMoE(TransformerEncoderLayer):
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
                  activation="relu", normalize_before=False, num_experts=4, top_k=2):
         super().__init__(d_model, nhead, dim_feedforward, dropout, activation, normalize_before)
 
         # Replace FFN with MoE
-        self.moe_layer = MoELayer(d_model, dim_feedforward, num_experts, top_k)
+        self.moe_layer = MoELayerLoadBalance(d_model, dim_feedforward, num_experts, top_k)
         # self.norm1 = nn.RMSNorm(d_model)
         # self.norm2 = nn.RMSNorm(d_model)
 
@@ -172,7 +214,7 @@ class TransformerDecoderLayerWithMoE(TransformerDecoderLayer):
         super().__init__(d_model, nhead, dim_feedforward, dropout, activation, normalize_before)
        
         
-        self.moe_layer = MoELayer(d_model, dim_feedforward, num_experts, top_k)
+        self.moe_layer = MoELayerLoadBalance(d_model, dim_feedforward, num_experts, top_k)
 
         # self.norm1 = nn.RMSNorm(d_model)
         # self.norm2 = nn.RMSNorm(d_model)
