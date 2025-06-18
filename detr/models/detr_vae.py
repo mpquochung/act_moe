@@ -142,7 +142,7 @@ class DETRVAE(nn.Module):
             
             if self.aux_loss:
                 hs, encoder_aux_loss, decoder_aux_loss = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, self.additional_pos_embed.weight)
-
+                hs = hs[0]
             else:
                 hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, self.additional_pos_embed.weight)[0]
         
@@ -153,7 +153,8 @@ class DETRVAE(nn.Module):
 
             if self.aux_loss:
                 hs, encoder_aux_loss, decoder_aux_loss = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)
-            
+                hs = hs[0]
+                
             else:
                 hs = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)[0]
  
@@ -339,4 +340,3 @@ def build_cnnmlp(args):
     print("number of parameters: %.2fM" % (n_parameters/1e6,))
 
     return model
-

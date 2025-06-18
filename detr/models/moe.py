@@ -127,6 +127,9 @@ class TransformerEncoderLayerWithMoE(nn.Module):
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
                  activation="relu", normalize_before=False, num_experts=4, top_k=2):
         super().__init__()
+        
+        
+        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
 
         self.num_experts = num_experts
         self.top_k = top_k
@@ -142,6 +145,9 @@ class TransformerEncoderLayerWithMoE(nn.Module):
         self.activation = _get_activation_fn(activation)
         self.normalize_before = normalize_before
 
+    def with_pos_embed(self, tensor, pos: Optional[Tensor]):
+        return tensor if pos is None else tensor + pos
+    
     def forward_post(self,
                      src,
                      src_mask: Optional[Tensor] = None,
@@ -205,6 +211,9 @@ class TransformerDecoderLayerWithMoE(nn.Module):
                  activation="relu", normalize_before=False, num_experts = 4, top_k = 2):
         super().__init__()
 
+        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.multihead_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        
         self.num_experts = num_experts
         self.top_k = top_k
         
