@@ -16,15 +16,22 @@ from utils import sample_box_pose, sample_insertion_pose # robot functions
 from utils import compute_dict_mean, set_seed, detach_dict # helper functions
 from policy import ACTPolicy, CNNMLPPolicy
 from visualize_episodes import save_videos
+import torch.multiprocessing as mp
 
 from sim_env import BOX_POSE
 
 import IPython
 e = IPython.embed
 
-def main(args):
+def main(rank, world_size, args):
     set_seed(1)
     # command line parameters
+    # os.environ['MASTER_ADDR'] = '127.0.0.1'
+    # os.environ['MASTER_PORT'] = '29500'
+
+    torch.distributed.init_process_group("nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
+
     is_eval = args['eval']
     ckpt_dir = args['ckpt_dir']
     policy_class = args['policy_class']
@@ -117,13 +124,16 @@ def main(args):
     with open(stats_path, 'wb') as f:
         pickle.dump(stats, f)
 
-    best_ckpt_info = train_bc(train_dataloader, val_dataloader, config)
+    best_ckpt_info = train_bc(train_dataloader, val_dataloader, config, rank)
     best_epoch, min_val_loss, best_state_dict = best_ckpt_info
 
     # save best checkpoint
     ckpt_path = os.path.join(ckpt_dir, f'policy_best.ckpt')
     torch.save(best_state_dict, ckpt_path)
     print(f'Best ckpt, val loss {min_val_loss:.6f} @ epoch{best_epoch}')
+
+    torch.distributed.destroy_process_group()
+
 
 
 def make_policy(policy_class, policy_config):
@@ -138,9 +148,9 @@ def make_policy(policy_class, policy_config):
 
 def make_optimizer(policy_class, policy):
     if policy_class == 'ACT':
-        optimizer = policy.configure_optimizers()
+        optimizer = policy.module.configure_optimizers()
     elif policy_class == 'CNNMLP':
-        optimizer = policy.configure_optimizers()
+        optimizer = policy.module.configure_optimizers()
     else:
         raise NotImplementedError
     return optimizer
@@ -329,7 +339,7 @@ def forward_pass(data, policy):
     return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
 
 
-def train_bc(train_dataloader, val_dataloader, config):
+def train_bc(train_dataloader, val_dataloader, config, rank):
     num_epochs = config['num_epochs']
     ckpt_dir = config['ckpt_dir']
     seed = config['seed']
@@ -339,34 +349,40 @@ def train_bc(train_dataloader, val_dataloader, config):
     set_seed(seed)
 
     policy = make_policy(policy_class, policy_config)
-    policy.cuda()
+    policy = torch.nn.parallel.DistributedDataParallel(policy, device_ids=[rank], find_unused_parameters=True)
     optimizer = make_optimizer(policy_class, policy)
 
     train_history = []
     validation_history = []
     min_val_loss = np.inf
     best_ckpt_info = None
+
     for epoch in tqdm(range(num_epochs)):
+        train_dataloader.sampler.set_epoch(epoch)
+        val_dataloader.sampler.set_epoch(epoch)
         print(f'\nEpoch {epoch}')
         # validation
-        with torch.inference_mode():
-            policy.eval()
-            epoch_dicts = []
-            for batch_idx, data in enumerate(val_dataloader):
-                forward_dict = forward_pass(data, policy)
-                epoch_dicts.append(forward_dict)
-            epoch_summary = compute_dict_mean(epoch_dicts)
-            validation_history.append(epoch_summary)
+        start = time.time()
+        if epoch % 10 == 0:
+            with torch.inference_mode():
+                policy.eval()
+                epoch_dicts = []
+                for batch_idx, data in enumerate(val_dataloader):
+                    forward_dict = forward_pass(data, policy)
+                    epoch_dicts.append(forward_dict)
+                epoch_summary = compute_dict_mean(epoch_dicts)
+                validation_history.append(epoch_summary)
 
-            epoch_val_loss = epoch_summary['loss']
-            if epoch_val_loss < min_val_loss:
-                min_val_loss = epoch_val_loss
-                best_ckpt_info = (epoch, min_val_loss, deepcopy(policy.state_dict()))
-        tqdm.write(f'Val loss:   {epoch_val_loss:.5f}')
-        summary_string = ''
-        for k, v in epoch_summary.items():
-            summary_string += f'{k}: {v.item():.3f} '
-        tqdm.write(summary_string)
+                epoch_val_loss = epoch_summary['loss']
+                if epoch_val_loss < min_val_loss:
+                    min_val_loss = epoch_val_loss
+                    best_ckpt_info = (epoch, min_val_loss, deepcopy(policy.state_dict()))
+            tqdm.write(f'Val loss:   {epoch_val_loss:.5f}')
+            summary_string = ''
+            for k, v in epoch_summary.items():
+                summary_string += f'{k}: {v.item():.3f} '
+            tqdm.write(f"{summary_string}")
+            tqdm.write(f"Eval take: {time.time() - start}")
 
         # training
         policy.train()
@@ -374,15 +390,15 @@ def train_bc(train_dataloader, val_dataloader, config):
         for batch_idx, data in enumerate(train_dataloader):
             start = time.time()
             forward_dict = forward_pass(data, policy)
-            tqdm.write("Forward take:", time.time() - start)
+            # print("Forward take:", time.time()-start)
             # backward
             start = time.time()
             loss = forward_dict['loss']
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
-            tqdm.write("Backward take:", time.time() - start)
             train_history.append(detach_dict(forward_dict))
+            # print("Backward take:", time.time()-start)
         epoch_summary = compute_dict_mean(train_history[(batch_idx+1)*epoch:(batch_idx+1)*(epoch+1)])
         epoch_train_loss = epoch_summary['loss']
         tqdm.write(f'Train loss: {epoch_train_loss:.5f}')
@@ -436,6 +452,7 @@ def str2bool(v):
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--eval', action='store_true')
@@ -463,4 +480,8 @@ if __name__ == '__main__':
     parser.add_argument('--top_k', action='store', type=int, help='top_k', required=False, default=2)
     parser.add_argument('--temporal_agg', action='store_true')
     
-    main(vars(parser.parse_args()))
+    args = vars(parser.parse_args())  
+    world_size = torch.cuda.device_count()
+    os.environ['MASTER_ADDR'] = '127.0.0.1'
+    os.environ['MASTER_PORT'] = '29500'
+    mp.spawn(main, args=(world_size, args), nprocs=world_size)
