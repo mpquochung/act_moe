@@ -116,9 +116,10 @@ def main(args):
 
     best_ckpt_info = train_bc(train_dataloader, val_dataloader, config)
     best_epoch, min_val_loss, best_state_dict = best_ckpt_info
-
+    
     # save best checkpoint
-    ckpt_path = os.path.join(ckpt_dir, f'policy_best.ckpt')
+    seed = args['seed']
+    ckpt_path = os.path.join(ckpt_dir, f'policy_best_seed_{seed}.ckpt')
     torch.save(best_state_dict, ckpt_path)
     print(f'Best ckpt, val loss {min_val_loss:.6f} @ epoch{best_epoch}')
 
@@ -341,7 +342,9 @@ def train_bc(train_dataloader, val_dataloader, config):
         load_status = policy.load_state_dict(torch.load(ckpt_path))
         print(load_status)
 
-    policy.cuda()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("using", device)
+    policy.to(device)
     optimizer = make_optimizer(policy_class, policy)
 
     train_history = []
@@ -396,7 +399,7 @@ def train_bc(train_dataloader, val_dataloader, config):
             summary_string += f'{k}: {v.item():.3f} '
         print(summary_string)
 
-        if epoch % 200 == 0:
+        if epoch >1000 and epoch % 200 == 0:
             ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{epoch}_seed_{seed}.ckpt')
             torch.save(policy.state_dict(), ckpt_path)
             plot_history(train_history, validation_history, epoch, ckpt_dir, seed)

@@ -30,6 +30,13 @@ SIM_TASK_CONFIGS = {
         'episode_len': 500,
         'camera_names': ['top']
     },
+
+    'sim_tool_hang': {
+        'dataset_dir': DATA_DIR + '/sim_tool_hang',
+        'num_episodes': 50,
+        'episode_len': 700,
+        'camera_names': ['agentview']
+    },
 }
 
 ### Simulation envs fixed constants
