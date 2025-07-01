@@ -162,7 +162,7 @@ class TransformerEncoderLayerWithMoE(TransformerEncoderLayer):
         super().__init__(d_model, nhead, dim_feedforward, dropout, activation, normalize_before)
 
         # Replace FFN with MoE
-        self.moe_layer = MoELayerLoadBalance(d_model, dim_feedforward, num_experts, top_k)
+        self.moe_layer = MoELayer(d_model, dim_feedforward, num_experts, top_k)
         # self.norm1 = nn.RMSNorm(d_model)
         # self.norm2 = nn.RMSNorm(d_model)
 
@@ -214,7 +214,7 @@ class TransformerDecoderLayerWithMoE(TransformerDecoderLayer):
         super().__init__(d_model, nhead, dim_feedforward, dropout, activation, normalize_before)
        
         
-        self.moe_layer = MoELayerLoadBalance(d_model, dim_feedforward, num_experts, top_k)
+        self.moe_layer = MoELayer(d_model, dim_feedforward, num_experts, top_k)
 
         # self.norm1 = nn.RMSNorm(d_model)
         # self.norm2 = nn.RMSNorm(d_model)

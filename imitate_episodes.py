@@ -248,7 +248,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
                 qpos_history[:, t] = qpos
                 curr_image = get_image(ts, camera_names)
-
+                
                 ### query policy
                 if config['policy_class'] == "ACT":
                     if t % query_frequency == 0:
@@ -332,7 +332,7 @@ def train_bc(train_dataloader, val_dataloader, config):
     policy_class = config['policy_class']
     policy_config = config['policy_config']
     ckpt_name = config['ckpt_name']
-
+    print(seed)
     set_seed(seed)
 
     policy = make_policy(policy_class, policy_config)
@@ -399,12 +399,12 @@ def train_bc(train_dataloader, val_dataloader, config):
             summary_string += f'{k}: {v.item():.3f} '
         print(summary_string)
 
-        if epoch >1000 and epoch % 200 == 0:
+        if epoch >2000 and epoch % 200 == 0:
             ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{epoch}_seed_{seed}.ckpt')
             torch.save(policy.state_dict(), ckpt_path)
             plot_history(train_history, validation_history, epoch, ckpt_dir, seed)
 
-    ckpt_path = os.path.join(ckpt_dir, f'policy_last.ckpt')
+    ckpt_path = os.path.join(ckpt_dir, f'policy_last_seed_{seed}.ckpt')
     torch.save(policy.state_dict(), ckpt_path)
 
     best_epoch, min_val_loss, best_state_dict = best_ckpt_info

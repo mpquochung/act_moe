@@ -33,10 +33,18 @@ SIM_TASK_CONFIGS = {
 
     'sim_tool_hang': {
         'dataset_dir': DATA_DIR + '/sim_tool_hang',
-        'num_episodes': 50,
+        'num_episodes': 150,
         'episode_len': 700,
         'camera_names': ['agentview']
     },
+
+    'sim_transport': {
+        'dataset_dir': DATA_DIR + '/sim_transport',
+        'num_episodes': 150,
+        'episode_len': 600,
+        'camera_names': ['agentview']
+    },
+
 }
 
 ### Simulation envs fixed constants

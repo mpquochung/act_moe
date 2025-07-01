@@ -60,7 +60,7 @@ class DETRVAE(nn.Module):
         else:
             # input_dim = 14 + 7 # robot_state + env_state
             self.input_proj_robot_state = nn.Linear(14, hidden_dim)
-            self.input_proj_env_state = nn.Linear(7, hidden_dim)
+            self.input_proj_env_state = nn.Linear(7, hidden_dim) #This is 7
             self.pos = torch.nn.Embedding(2, hidden_dim)
             self.backbones = None
 
