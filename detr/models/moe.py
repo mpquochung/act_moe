@@ -1,7 +1,7 @@
 from .transformer import TransformerDecoderLayer, TransformerEncoderLayer, TransformerEncoder, TransformerDecoder
 
 import copy
-from typing import Optional, List
+from typing import Optional, Union, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -114,8 +114,7 @@ class MoELayer(nn.Module):
 
         return expert_outputs.view(seq_len, batch_size, dim)
     
-
-
+    
 class MoELayerLoadBalance(nn.Module):
     def __init__(self, d_model, dim_feedforward, num_experts=4, top_k=2):
         super().__init__()
@@ -133,7 +132,6 @@ class MoELayerLoadBalance(nn.Module):
         scores = self.gate(x_flat)  # [seq_len * batch, num_experts]
         gate_probs = torch.sigmoid(scores)
         gate_logits = scores + self.expert_biases
-
         _, topk_idx = torch.topk(gate_logits, self.top_k, dim=-1)  # [seq_len * batch, k]
         top_k_probs = gate_probs.gather(-1, topk_idx)  # [seq_len * batch, k]
         
@@ -162,7 +160,7 @@ class TransformerEncoderLayerWithMoE(TransformerEncoderLayer):
         super().__init__(d_model, nhead, dim_feedforward, dropout, activation, normalize_before)
 
         # Replace FFN with MoE
-        self.moe_layer = MoELayer(d_model, dim_feedforward, num_experts, top_k)
+        self.moe_layer = MoELayerLoadBalance(d_model, dim_feedforward, num_experts, top_k)
         # self.norm1 = nn.RMSNorm(d_model)
         # self.norm2 = nn.RMSNorm(d_model)
 
@@ -214,7 +212,7 @@ class TransformerDecoderLayerWithMoE(TransformerDecoderLayer):
         super().__init__(d_model, nhead, dim_feedforward, dropout, activation, normalize_before)
        
         
-        self.moe_layer = MoELayer(d_model, dim_feedforward, num_experts, top_k)
+        self.moe_layer = MoELayerLoadBalance(d_model, dim_feedforward, num_experts, top_k)
 
         # self.norm1 = nn.RMSNorm(d_model)
         # self.norm2 = nn.RMSNorm(d_model)
@@ -282,6 +280,89 @@ class TransformerDecoderLayerWithMoE(TransformerDecoderLayer):
                                     tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos)
         return self.forward_post(tgt, memory, tgt_mask, memory_mask,
                                  tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos)
+
+
+def load_balancing_loss_func(
+    gate_logits: Union[torch.Tensor, Tuple[torch.Tensor], None],
+    num_experts: Optional[int] = None,
+    top_k=2,
+    attention_mask: Optional[torch.Tensor] = None,
+) -> Union[torch.Tensor, int]:
+    r"""
+    Computes auxiliary load balancing loss as in Switch Transformer - implemented in Pytorch.
+
+    See Switch Transformer (https://huggingface.co/papers/2101.03961) for more details. This function implements the loss
+    function presented in equations (4) - (6) of the paper. It aims at penalizing cases where the routing between
+    experts is too unbalanced.
+
+    Args:
+        gate_logits:
+            Logits from the `gate`, should be a tuple of model.config.num_hidden_layers tensors of
+            shape [batch_size X sequence_length, num_experts].
+        num_experts:
+            Number of experts
+        top_k:
+            The number of experts to route per-token, can be also interpreted as the `top-k` routing
+            parameter.
+        attention_mask (`torch.Tensor`, *optional*):
+            The attention_mask used in forward function
+            shape [batch_size X sequence_length] if not None.
+
+    Returns:
+        The auxiliary loss.
+    """
+    if gate_logits is None or not isinstance(gate_logits, tuple):
+        return 0
+
+    if isinstance(gate_logits, tuple):
+        compute_device = gate_logits[0].device
+        concatenated_gate_logits = torch.cat([layer_gate.to(compute_device) for layer_gate in gate_logits], dim=0)
+
+    routing_weights = torch.nn.functional.softmax(concatenated_gate_logits, dim=-1)
+
+    _, selected_experts = torch.topk(routing_weights, top_k, dim=-1)
+
+    expert_mask = torch.nn.functional.one_hot(selected_experts, num_experts)
+
+    if attention_mask is None:
+        # Compute the percentage of tokens routed to each experts
+        tokens_per_expert = torch.mean(expert_mask.float(), dim=0)
+
+        # Compute the average probability of routing to these experts
+        router_prob_per_expert = torch.mean(routing_weights, dim=0)
+    else:
+        batch_size, sequence_length = attention_mask.shape
+        num_hidden_layers = concatenated_gate_logits.shape[0] // (batch_size * sequence_length)
+
+        # Compute the mask that masks all padding tokens as 0 with the same shape of expert_mask
+        expert_attention_mask = (
+            attention_mask[None, :, :, None, None]
+            .expand((num_hidden_layers, batch_size, sequence_length, top_k, num_experts))
+            .reshape(-1, top_k, num_experts)
+            .to(compute_device)
+        )
+
+        # Compute the percentage of tokens routed to each experts
+        tokens_per_expert = torch.sum(expert_mask.float() * expert_attention_mask, dim=0) / torch.sum(
+            expert_attention_mask, dim=0
+        )
+
+        # Compute the mask that masks all padding tokens as 0 with the same shape of tokens_per_expert
+        router_per_expert_attention_mask = (
+            attention_mask[None, :, :, None]
+            .expand((num_hidden_layers, batch_size, sequence_length, num_experts))
+            .reshape(-1, num_experts)
+            .to(compute_device)
+        )
+
+        # Compute the average probability of routing to these experts
+        router_prob_per_expert = torch.sum(routing_weights * router_per_expert_attention_mask, dim=0) / torch.sum(
+            router_per_expert_attention_mask, dim=0
+        )
+
+    overall_loss = torch.sum(tokens_per_expert * router_prob_per_expert.unsqueeze(0))
+    return overall_loss * num_experts
+
 
 def _get_activation_fn(activation):
     """Return an activation function given a string"""
