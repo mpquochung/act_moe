@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from copy import deepcopy
 from tqdm import tqdm
 from einops import rearrange
-
+from pathlib import Path
 from constants import DT
 from constants import PUPPET_GRIPPER_JOINT_OPEN
 from utils import load_data # data functions
@@ -15,7 +15,7 @@ from utils import sample_box_pose, sample_insertion_pose # robot functions
 from utils import compute_dict_mean, set_seed, detach_dict # helper functions
 from policy import ACTPolicy, CNNMLPPolicy
 from visualize_episodes import save_videos
-
+import json
 from sim_env import BOX_POSE
 
 import IPython
@@ -40,8 +40,8 @@ def main(args):
         from constants import SIM_TASK_CONFIGS
         task_config = SIM_TASK_CONFIGS[task_name]
     else:
-        from aloha_scripts.constants import TASK_CONFIGS
-        task_config = TASK_CONFIGS[task_name]
+        from constants import REAL_TASK_CONFIGS
+        task_config = REAL_TASK_CONFIGS[task_name]
     dataset_dir = task_config['dataset_dir']
     num_episodes = task_config['num_episodes']
     episode_len = task_config['episode_len']
@@ -188,7 +188,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
         from aloha_scripts.robot_utils import move_grippers # requires aloha
         from aloha_scripts.real_env import make_real_env # requires aloha
         env = make_real_env(init_node=True)
-        env_max_reward = 0
+        env_max_reward = 0  
     else:
         from sim_env import make_sim_env
         env = make_sim_env(task_name)
@@ -201,7 +201,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
     max_timesteps = int(max_timesteps * 1) # may increase for real-world tasks
 
-    num_rollouts = 50
+    num_rollouts = 1
     episode_returns = []
     highest_rewards = []
     for rollout_id in range(num_rollouts):
@@ -229,6 +229,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
         qpos_list = []
         target_qpos_list = []
         rewards = []
+        gating_log = []
         with torch.inference_mode():
             for t in range(max_timesteps):
                 ### update onscreen render and wait for DT
@@ -263,12 +264,31 @@ def eval_bc(config, ckpt_name, save_episode=True):
                         exp_weights = exp_weights / exp_weights.sum()
                         exp_weights = torch.from_numpy(exp_weights).cuda().unsqueeze(dim=1)
                         raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
+
                     else:
                         raw_action = all_actions[:, t % query_frequency]
                 elif config['policy_class'] == "CNNMLP":
                     raw_action = policy(qpos, curr_image)
                 else:
                     raise NotImplementedError
+
+                moe_info = policy.model.get_moe_gating_info()
+                
+                serializable_info = {}
+                for module_type in ["encoder", "decoder"]:
+                    serializable_info[module_type] = []
+                    for layer in moe_info[module_type]:
+                        serializable_info[module_type].append({
+                            "layer": layer["layer"],
+                            "indices": layer["indices"].tolist(),   # [seq, batch, top_k]
+                            "probs": layer["probs"].tolist(),       # [seq, batch, num_experts]
+                        })
+
+                gating_log.append({
+                    "timestep": t,
+                    "moe_info": serializable_info
+                })
+
 
                 ### post-process actions
                 raw_action = raw_action.squeeze(0).cpu().numpy()
@@ -284,6 +304,11 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 rewards.append(ts.reward)
 
             plt.close()
+
+            Path(os.path.join(ckpt_dir,"logs")).mkdir(exist_ok=True)
+            with open(os.path.join(ckpt_dir,f"logs/moe_gating_log.json"), "w") as f:
+                json.dump(gating_log, f, indent=2)
+
         if real_robot:
             move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
             pass

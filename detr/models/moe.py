@@ -68,6 +68,8 @@ class TransformerMoE(nn.Module):
                           pos=pos_embed, query_pos=query_embed)
         hs = hs.transpose(1, 2)
         return hs
+    
+    
 
 class Expert(nn.Module):
     def __init__(self, d_model, dim_feedforward):
@@ -95,6 +97,7 @@ class MoELayer(nn.Module):
         x_flat = x.view(-1, dim)  # [seq_len * batch, dim]
 
         scores = self.gate(x_flat)  # [seq_len * batch, num_experts]
+        full_probs = torch.softmax(scores, dim=-1)
         topk_vals, topk_idx = torch.topk(scores, self.top_k, dim=-1)  # [seq_len * batch, k]
         topk_probs = torch.softmax(topk_vals, dim=-1)  # [seq_len * batch, k]
 
@@ -111,6 +114,11 @@ class MoELayer(nn.Module):
                 selected_inputs = x_flat[mask]
                 outputs = self.experts[e_idx](selected_inputs)
                 expert_outputs[mask] += expert_prob[mask] * outputs
+
+
+        self.last_gating_probs = full_probs.view(seq_len, batch_size, self.num_experts)
+        self.last_gating_idx = topk_idx.view(seq_len, batch_size, self.top_k)
+
 
         return expert_outputs.view(seq_len, batch_size, dim)
     
@@ -160,10 +168,10 @@ class TransformerEncoderLayerWithMoE(TransformerEncoderLayer):
         super().__init__(d_model, nhead, dim_feedforward, dropout, activation, normalize_before)
 
         # Replace FFN with MoE
-        self.moe_layer = MoELayerLoadBalance(d_model, dim_feedforward, num_experts, top_k)
+        self.moe_layer = MoELayer(d_model, dim_feedforward, num_experts, top_k)
         # self.norm1 = nn.RMSNorm(d_model)
         # self.norm2 = nn.RMSNorm(d_model)
-
+        
     def forward_post(self,
                      src,
                      src_mask: Optional[Tensor] = None,
@@ -176,7 +184,7 @@ class TransformerEncoderLayerWithMoE(TransformerEncoderLayer):
         src = self.norm1(src)
 
         src2 = self.moe_layer(src)  # Replaces FFN with MoE
-
+        
         src = src + self.dropout2(src2)
         src = self.norm2(src)
         return src
@@ -212,7 +220,7 @@ class TransformerDecoderLayerWithMoE(TransformerDecoderLayer):
         super().__init__(d_model, nhead, dim_feedforward, dropout, activation, normalize_before)
        
         
-        self.moe_layer = MoELayerLoadBalance(d_model, dim_feedforward, num_experts, top_k)
+        self.moe_layer = MoELayer(d_model, dim_feedforward, num_experts, top_k)
 
         # self.norm1 = nn.RMSNorm(d_model)
         # self.norm2 = nn.RMSNorm(d_model)
@@ -240,7 +248,9 @@ class TransformerDecoderLayerWithMoE(TransformerDecoderLayer):
                                    key_padding_mask=memory_key_padding_mask)[0]
         tgt = tgt + self.dropout2(tgt2)
         tgt = self.norm2(tgt)
-        tgt2 = self.moe_layer(tgt)
+        tgt2  = self.moe_layer(tgt)
+
+
         tgt = tgt + self.dropout3(tgt2)
         tgt = self.norm3(tgt)
         return tgt
@@ -265,6 +275,7 @@ class TransformerDecoderLayerWithMoE(TransformerDecoderLayer):
         tgt = tgt + self.dropout2(tgt2)
         tgt2 = self.norm3(tgt)
         tgt2 = self.moe_layer(tgt2)
+
         tgt = tgt + self.dropout3(tgt2)
         return tgt
 

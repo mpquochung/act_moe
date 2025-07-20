@@ -56,10 +56,10 @@ class DETRVAE(nn.Module):
         if backbones is not None:
             self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
             self.backbones = nn.ModuleList(backbones)
-            self.input_proj_robot_state = nn.Linear(14, hidden_dim)
+            self.input_proj_robot_state = nn.Linear(7, hidden_dim)
         else:
             # input_dim = 14 + 7 # robot_state + env_state
-            self.input_proj_robot_state = nn.Linear(14, hidden_dim)
+            self.input_proj_robot_state = nn.Linear(7, hidden_dim)
             self.input_proj_env_state = nn.Linear(7, hidden_dim) #This is 7
             self.pos = torch.nn.Embedding(2, hidden_dim)
             self.backbones = None
@@ -67,8 +67,8 @@ class DETRVAE(nn.Module):
         # encoder extra parameters
         self.latent_dim = 32 # final size of latent z # TODO tune
         self.cls_embed = nn.Embedding(1, hidden_dim) # extra cls token embedding
-        self.encoder_action_proj = nn.Linear(14, hidden_dim) # project action to embedding
-        self.encoder_joint_proj = nn.Linear(14, hidden_dim)  # project qpos to embedding
+        self.encoder_action_proj = nn.Linear(7, hidden_dim) # project action to embedding
+        self.encoder_joint_proj = nn.Linear(7, hidden_dim)  # project qpos to embedding
         self.latent_proj = nn.Linear(hidden_dim, self.latent_dim*2) # project hidden state to latent std, var
         self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_queries, hidden_dim)) # [CLS], qpos, a_seq
 
@@ -138,6 +138,35 @@ class DETRVAE(nn.Module):
         a_hat = self.action_head(hs)
         is_pad_hat = self.is_pad_head(hs)
         return a_hat, is_pad_hat, [mu, logvar]
+    
+    def get_moe_gating_info(self):
+        gating_info = {
+            'encoder': [],
+            'decoder': []
+        }
+
+        # Encoder MoE gating info
+        for i, layer in enumerate(self.transformer.encoder.layers):
+            moe_layer = getattr(layer, 'moe_layer', None)
+            if moe_layer is not None and hasattr(moe_layer, 'last_gating_probs'):
+                gating_info['encoder'].append({
+                    'layer': i,
+                    'probs': moe_layer.last_gating_probs.detach().cpu(),
+                    'indices': moe_layer.last_gating_idx.detach().cpu()
+                })
+
+        # Decoder MoE gating info
+        for i, layer in enumerate(self.transformer.decoder.layers):
+            moe_layer = getattr(layer, 'moe_layer', None)
+            if moe_layer is not None and hasattr(moe_layer, 'last_gating_probs'):
+                gating_info['decoder'].append({
+                    'layer': i,
+                    'probs': moe_layer.last_gating_probs.detach().cpu(),
+                    'indices': moe_layer.last_gating_idx.detach().cpu()
+                })
+
+        return gating_info
+
 
 
 
@@ -167,8 +196,8 @@ class CNNMLP(nn.Module):
                 backbone_down_projs.append(down_proj)
             self.backbone_down_projs = nn.ModuleList(backbone_down_projs)
 
-            mlp_in_dim = 768 * len(backbones) + 14
-            self.mlp = mlp(input_dim=mlp_in_dim, hidden_dim=1024, output_dim=14, hidden_depth=2)
+            mlp_in_dim = 768 * len(backbones) + 7
+            self.mlp = mlp(input_dim=mlp_in_dim, hidden_dim=1024, output_dim=7, hidden_depth=2)
         else:
             raise NotImplementedError
 
@@ -246,7 +275,7 @@ def build_encoder_moe(args):
 
 
 def build(args):
-    state_dim = 14 # TODO hardcode
+    state_dim = 7 # TODO hardcode
 
     # From state
     # backbone = None # from state for now, no need for conv nets
@@ -293,7 +322,7 @@ def build(args):
     return model
 
 def build_cnnmlp(args):
-    state_dim = 14 # TODO hardcode
+    state_dim = 7 # TODO hardcode
 
     # From state
     # backbone = None # from state for now, no need for conv nets
