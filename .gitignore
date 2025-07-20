@@ -145,4 +145,6 @@ checkpoints/*
 
 draft.py
 
+draft.ipynb
+
 training_scripts/*
