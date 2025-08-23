@@ -1,5 +1,4 @@
-from .transformer import TransformerDecoderLayer, TransformerEncoderLayer, TransformerEncoder, TransformerDecoder
-
+from .transformer import TransformerDecoderLayer, TransformerEncoderLayer
 import copy
 from typing import Optional, Union, Tuple
 
@@ -21,12 +20,12 @@ class TransformerMoE(nn.Module):
         encoder_layer = TransformerEncoderLayerWithMoE(d_model, nhead, dim_feedforward,
                                                 dropout, activation, normalize_before, num_experts, top_k)
         encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
-        self.encoder = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
+        self.encoder = TransformerEncoderMoE(encoder_layer, num_encoder_layers, encoder_norm)
 
         decoder_layer = TransformerDecoderLayerWithMoE(d_model, nhead, dim_feedforward,
                                                 dropout, activation, normalize_before, num_experts, top_k)
         decoder_norm = nn.LayerNorm(d_model)
-        self.decoder = TransformerDecoder(decoder_layer, num_decoder_layers, decoder_norm,
+        self.decoder = TransformerDecoderMoE(decoder_layer, num_decoder_layers, decoder_norm,
                                           return_intermediate=return_intermediate_dec)
 
         self._reset_parameters()
@@ -63,12 +62,11 @@ class TransformerMoE(nn.Module):
             query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
 
         tgt = torch.zeros_like(query_embed)
-        memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
-        hs = self.decoder(tgt, memory, memory_key_padding_mask=mask,
+        memory, encoder_aux_loss = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
+        hs, decoder_aux_loss = self.decoder(tgt, memory, memory_key_padding_mask=mask,
                           pos=pos_embed, query_pos=query_embed)
         hs = hs.transpose(1, 2)
-        return hs
-    
+        return hs, encoder_aux_loss, decoder_aux_loss
     
 
 class Expert(nn.Module):
@@ -120,7 +118,7 @@ class MoELayer(nn.Module):
         self.last_gating_idx = topk_idx.view(seq_len, batch_size, self.top_k)
 
 
-        return expert_outputs.view(seq_len, batch_size, dim)
+        return expert_outputs.view(seq_len, batch_size, dim), scores, topk_idx
     
     
 class MoELayerLoadBalance(nn.Module):
@@ -159,6 +157,9 @@ class MoELayerLoadBalance(nn.Module):
                 outputs = self.experts[e_idx](selected_inputs)
                 expert_outputs[mask] += expert_prob[mask] * outputs
 
+        self.last_gating_probs = gate_probs.view(seq_len, batch_size, self.num_experts)
+        self.last_gating_idx = topk_idx.view(seq_len, batch_size, self.top_k)
+
         return expert_outputs.view(seq_len, batch_size, dim)
 
 
@@ -183,11 +184,11 @@ class TransformerEncoderLayerWithMoE(TransformerEncoderLayer):
         src = src + self.dropout1(src2)
         src = self.norm1(src)
 
-        src2 = self.moe_layer(src)  # Replaces FFN with MoE
-        
+        src2, gate_logits, topk_idx = self.moe_layer(src) 
         src = src + self.dropout2(src2)
         src = self.norm2(src)
-        return src
+        
+        return src, gate_logits, topk_idx
 
     def forward_pre(self, src,
                     src_mask: Optional[Tensor] = None,
@@ -200,10 +201,11 @@ class TransformerEncoderLayerWithMoE(TransformerEncoderLayer):
         src = src + self.dropout1(src2)
         src2 = self.norm2(src)
 
-        src2 = self.moe_layer(src2)
-
+        src2, gate_logits, topk_idx = self.moe_layer(src2)
         src = src + self.dropout2(src2)
-        return src
+        
+        return src, gate_logits, topk_idx
+
 
     def forward(self, src,
                 src_mask: Optional[Tensor] = None,
@@ -248,12 +250,11 @@ class TransformerDecoderLayerWithMoE(TransformerDecoderLayer):
                                    key_padding_mask=memory_key_padding_mask)[0]
         tgt = tgt + self.dropout2(tgt2)
         tgt = self.norm2(tgt)
-        tgt2  = self.moe_layer(tgt)
-
-
+        
+        tgt2, gate_logits, topk_idx = self.moe_layer(tgt)
         tgt = tgt + self.dropout3(tgt2)
         tgt = self.norm3(tgt)
-        return tgt
+        return tgt, gate_logits, topk_idx
 
     def forward_pre(self, tgt, memory,
                     tgt_mask: Optional[Tensor] = None,
@@ -274,10 +275,9 @@ class TransformerDecoderLayerWithMoE(TransformerDecoderLayer):
                                    key_padding_mask=memory_key_padding_mask)[0]
         tgt = tgt + self.dropout2(tgt2)
         tgt2 = self.norm3(tgt)
-        tgt2 = self.moe_layer(tgt2)
-
+        tgt2, gate_logits, topk_idx = self.moe_layer(tgt2)
         tgt = tgt + self.dropout3(tgt2)
-        return tgt
+        return tgt, gate_logits, topk_idx
 
     def forward(self, tgt, memory,
                 tgt_mask: Optional[Tensor] = None,
@@ -293,6 +293,81 @@ class TransformerDecoderLayerWithMoE(TransformerDecoderLayer):
                                  tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos)
 
 
+
+class TransformerEncoderMoE(nn.Module):
+
+    def __init__(self, encoder_layer: TransformerEncoderLayerWithMoE, num_layers, norm=None):
+        super().__init__()
+        self.layers = _get_clones(encoder_layer, num_layers)
+        self.num_layers = num_layers
+        self.norm = norm
+
+    def forward(self, src,
+                mask: Optional[Tensor] = None,
+                src_key_padding_mask: Optional[Tensor] = None,
+                pos: Optional[Tensor] = None):
+        output = src
+
+        gate_logits_per_layer = tuple()
+
+        for layer in self.layers:
+            output, gate_logits, topk_idx = layer(output, src_mask=mask,
+                           src_key_padding_mask=src_key_padding_mask, pos=pos)
+            gate_logits_per_layer += (gate_logits,)
+
+        if self.norm is not None:
+            output = self.norm(output)
+
+        aux_loss = load_balancing_loss_func(tuple(gate_logits_per_layer), num_experts=self.layers[0].moe_layer.num_experts, top_k=self.layers[0].moe_layer.top_k)
+
+        return output, aux_loss
+
+
+class TransformerDecoderMoE(nn.Module):
+
+    def __init__(self, decoder_layer, num_layers, norm=None, return_intermediate=False):
+        super().__init__()
+        self.layers = _get_clones(decoder_layer, num_layers)
+        self.num_layers = num_layers
+        self.norm = norm
+        self.return_intermediate = return_intermediate
+
+    def forward(self, tgt, memory,
+                tgt_mask: Optional[Tensor] = None,
+                memory_mask: Optional[Tensor] = None,
+                tgt_key_padding_mask: Optional[Tensor] = None,
+                memory_key_padding_mask: Optional[Tensor] = None,
+                pos: Optional[Tensor] = None,
+                query_pos: Optional[Tensor] = None):
+        output = tgt
+
+        intermediate = []
+
+        gate_logits_per_layer = tuple()
+
+        for layer in self.layers:
+            output, gate_logits, topk_idx = layer(output, memory, tgt_mask=tgt_mask,
+                           memory_mask=memory_mask,
+                           tgt_key_padding_mask=tgt_key_padding_mask,
+                           memory_key_padding_mask=memory_key_padding_mask,
+                           pos=pos, query_pos=query_pos)
+            if self.return_intermediate:
+                intermediate.append(self.norm(output))
+            
+            gate_logits_per_layer += (gate_logits,)
+
+        if self.norm is not None:
+            output = self.norm(output)
+            if self.return_intermediate:
+                intermediate.pop()
+                intermediate.append(output)
+        aux_loss = load_balancing_loss_func(tuple(gate_logits_per_layer), num_experts=self.layers[0].moe_layer.num_experts, top_k=self.layers[0].moe_layer.top_k)
+
+        if self.return_intermediate:
+            return torch.stack(intermediate), aux_loss
+
+        return output.unsqueeze(0), aux_loss
+    
 def load_balancing_loss_func(
     gate_logits: Union[torch.Tensor, Tuple[torch.Tensor], None],
     num_experts: Optional[int] = None,

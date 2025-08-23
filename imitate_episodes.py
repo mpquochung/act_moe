@@ -201,7 +201,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
     max_timesteps = int(max_timesteps * 1) # may increase for real-world tasks
 
-    num_rollouts = 1
+    num_rollouts = 50
     episode_returns = []
     highest_rewards = []
     for rollout_id in range(num_rollouts):
@@ -306,7 +306,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
             plt.close()
 
             Path(os.path.join(ckpt_dir,"logs")).mkdir(exist_ok=True)
-            with open(os.path.join(ckpt_dir,f"logs/moe_gating_log.json"), "w") as f:
+            with open(os.path.join(ckpt_dir,f"logs/moe_gating_log_1.json"), "w") as f:
                 json.dump(gating_log, f, indent=2)
 
         if real_robot:
@@ -424,7 +424,7 @@ def train_bc(train_dataloader, val_dataloader, config):
             summary_string += f'{k}: {v.item():.3f} '
         print(summary_string)
 
-        if epoch >2000 and epoch % 200 == 0:
+        if epoch >1500 and epoch % 200 == 0:
             ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{epoch}_seed_{seed}.ckpt')
             torch.save(policy.state_dict(), ckpt_path)
             plot_history(train_history, validation_history, epoch, ckpt_dir, seed)

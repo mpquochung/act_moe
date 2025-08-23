@@ -7,7 +7,7 @@ from torch import nn
 from torch.autograd import Variable
 from .backbone import build_backbone
 from .transformer import build_transformer, TransformerEncoder, TransformerEncoderLayer
-from .moe import build_transformer_moe, TransformerEncoderLayerWithMoE
+from .moe import build_transformer_moe, TransformerEncoderLayerWithMoE, TransformerEncoderMoE
 
 import numpy as np
 
@@ -34,7 +34,7 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 
 class DETRVAE(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names):
+    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names, is_moe = False):
         """ Initializes the model.
         Parameters:
             backbones: torch module of the backbone to be used. See backbone.py
@@ -53,13 +53,14 @@ class DETRVAE(nn.Module):
         self.action_head = nn.Linear(hidden_dim, state_dim)
         self.is_pad_head = nn.Linear(hidden_dim, 1)
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
+        self.is_moe = is_moe
         if backbones is not None:
             self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
             self.backbones = nn.ModuleList(backbones)
-            self.input_proj_robot_state = nn.Linear(7, hidden_dim)
+            self.input_proj_robot_state = nn.Linear(14, hidden_dim)
         else:
             # input_dim = 14 + 7 # robot_state + env_state
-            self.input_proj_robot_state = nn.Linear(7, hidden_dim)
+            self.input_proj_robot_state = nn.Linear(14, hidden_dim)
             self.input_proj_env_state = nn.Linear(7, hidden_dim) #This is 7
             self.pos = torch.nn.Embedding(2, hidden_dim)
             self.backbones = None
@@ -67,8 +68,8 @@ class DETRVAE(nn.Module):
         # encoder extra parameters
         self.latent_dim = 32 # final size of latent z # TODO tune
         self.cls_embed = nn.Embedding(1, hidden_dim) # extra cls token embedding
-        self.encoder_action_proj = nn.Linear(7, hidden_dim) # project action to embedding
-        self.encoder_joint_proj = nn.Linear(7, hidden_dim)  # project qpos to embedding
+        self.encoder_action_proj = nn.Linear(14, hidden_dim) # project action to embedding
+        self.encoder_joint_proj = nn.Linear(14, hidden_dim)  # project qpos to embedding
         self.latent_proj = nn.Linear(hidden_dim, self.latent_dim*2) # project hidden state to latent std, var
         self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_queries, hidden_dim)) # [CLS], qpos, a_seq
 
@@ -102,13 +103,19 @@ class DETRVAE(nn.Module):
             pos_embed = self.pos_table.clone().detach()
             pos_embed = pos_embed.permute(1, 0, 2)  # (seq+1, 1, hidden_dim)
             # query model
-            encoder_output = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
-            encoder_output = encoder_output[0] # take cls output only
+            if self.is_moe:
+                encoder_output, state_encoder_aux_loss = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
+            
+            else:
+                encoder_output = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
+
+            encoder_output = encoder_output[0]
             latent_info = self.latent_proj(encoder_output)
             mu = latent_info[:, :self.latent_dim]
             logvar = latent_info[:, self.latent_dim:]
             latent_sample = reparametrize(mu, logvar)
             latent_input = self.latent_out_proj(latent_sample)
+
         else:
             mu = logvar = None
             latent_sample = torch.zeros([bs, self.latent_dim], dtype=torch.float32).to(qpos.device)
@@ -129,15 +136,32 @@ class DETRVAE(nn.Module):
             # fold camera dimension into width dimension
             src = torch.cat(all_cam_features, axis=3)
             pos = torch.cat(all_cam_pos, axis=3)
-            hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, self.additional_pos_embed.weight)[0]
+
+            if self.is_moe:
+                hs, encoder_aux_loss, decoder_aux_loss = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, self.additional_pos_embed.weight)
+                hs = hs[0]
+            else:
+                hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, self.additional_pos_embed.weight)[0]
+
         else:
             qpos = self.input_proj_robot_state(qpos)
             env_state = self.input_proj_env_state(env_state)
             transformer_input = torch.cat([qpos, env_state], axis=1) # seq length = 2
-            hs = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)[0]
+
+            if self.is_moe:
+                hs, encoder_aux_loss, decoder_aux_loss = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)
+                hs = hs[0]
+
+            else:
+                hs = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)[0]
+
         a_hat = self.action_head(hs)
         is_pad_hat = self.is_pad_head(hs)
-        return a_hat, is_pad_hat, [mu, logvar]
+
+        if self.is_moe and is_training:
+            return a_hat, is_pad_hat, [mu, logvar], state_encoder_aux_loss, encoder_aux_loss, decoder_aux_loss
+        else: 
+            return a_hat, is_pad_hat, [mu, logvar]
     
     def get_moe_gating_info(self):
         gating_info = {
@@ -166,8 +190,6 @@ class DETRVAE(nn.Module):
                 })
 
         return gating_info
-
-
 
 
 class CNNMLP(nn.Module):
@@ -269,13 +291,13 @@ def build_encoder_moe(args):
     encoder_layer = TransformerEncoderLayerWithMoE(d_model, nhead, dim_feedforward,
                                             dropout, activation, normalize_before, num_experts, top_k)
     encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
-    encoder = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
+    encoder = TransformerEncoderMoE(encoder_layer, num_encoder_layers, encoder_norm)
 
     return encoder
 
 
 def build(args):
-    state_dim = 7 # TODO hardcode
+    state_dim = 14 # TODO hardcode
 
     # From state
     # backbone = None # from state for now, no need for conv nets
@@ -292,29 +314,21 @@ def build(args):
 
         encoder = build_encoder_moe(args)
 
-        model = DETRVAE(
-            backbones,
-            transformer,
-            encoder,
-            state_dim=state_dim,
-            num_queries=args.num_queries,
-            camera_names=args.camera_names,
-        ) 
-
     else:
 
         transformer = build_transformer(args)
 
         encoder = build_encoder(args)
 
-        model = DETRVAE(
-            backbones,
-            transformer,
-            encoder,
-            state_dim=state_dim,
-            num_queries=args.num_queries,
-            camera_names=args.camera_names,
-        )
+    model = DETRVAE(
+        backbones,
+        transformer,
+        encoder,
+        state_dim=state_dim,
+        num_queries=args.num_queries,
+        camera_names=args.camera_names,
+        is_moe = args.is_moe
+    )
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print("number of parameters: %.2fM" % (n_parameters/1e6,))

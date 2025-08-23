@@ -50,9 +50,27 @@ SIM_TASK_CONFIGS = {
 REAL_TASK_CONFIGS = {
     'chopsticks':{
         'dataset_dir': DATA_DIR + '/chopsticks',
-        'num_episodes': 50,
+        'num_episodes': 49,
         'episode_len': 400,
         'camera_names': ['cam_0','cam_1']
+    },
+    'stack':{
+        'dataset_dir': DATA_DIR + '/stack',
+        'num_episodes': 66,
+        'episode_len': 700,
+        'camera_names': ['cam_0','cam_1']
+    },
+    'plugin':{
+        'dataset_dir': DATA_DIR + '/plugin',
+        'num_episodes': 51,
+        'episode_len': 400,
+        'camera_names': ['cam_0','cam_1']
+    },
+    'sortpen':{
+        'dataset_dir': DATA_DIR + '/sortpen',
+        'num_episodes': 51,
+        'episode_len': 500,
+        'camera_names': ['cam_0','cam_1','cam_2']
     },
 }
 
